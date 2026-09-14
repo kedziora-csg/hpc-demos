@@ -43,3 +43,13 @@ check_casper: gs_openmp omp_cmdfile
 #	echo && echo && $(launch_cf) -A $(account) -l walltime=0:10:00 --processors-per-node 32 --nthreads 8 --steps-per-node 4 --memory 300G --queue casper --cpu_type cascadelake --random_start_delay 5 -N all_args_test ./omp_cmdfile # all args
 
 check: check_$(NCAR_HOST)
+
+# scheduler-free check: exercise the argument handling and generate the PBS
+# scripts for inspection, without submitting anything.
+check_dryrun:
+	rm -rf ./dryrun && mkdir -p ./dryrun
+	echo && echo && $(launch_cf) -A $(account) -l walltime=0:10:00 --dryrun --script ./dryrun/defaults.pbs # defaults
+	echo && echo && $(launch_cf) -A $(account) -l walltime=0:10:00 --dryrun --script ./dryrun/smalltest.pbs ./smalltest # njobs < ppn
+	echo && echo && $(launch_cf) -A $(account) -l walltime=0:10:00 --nthreads 7 --steps-per-node 18 -l job_priority=economy --dryrun --script ./dryrun/threaded.pbs ./cmdfile # threaded, extra PBS args
+	echo && echo && $(launch_cf) -A $(account) -l walltime=0:10:00 --nthreads 4 --steps-per-node 8 -N name_override --random_start_delay 5 --dryrun --script ./dryrun/named.pbs ./cmdfile # -N override
+	@echo && echo "generated scripts:" && ls -1 ./dryrun/
