@@ -9,9 +9,15 @@ Each step-*.out file is expected to contain a line like:
 If an lscpu.txt file (output of `lscpu`) is available, it is used to map
 each hardware thread ("core" above, i.e. a Linux CPU id) to its physical
 core, based on the "NUMA node<N> CPU(s):" lines and "Thread(s) per core:".
-A "physical core" column is added to the CSV, and a warning is printed to
-stderr for any host that reuses the same physical core across more than
-one run (i.e. two runs scheduled onto sibling hardware threads).
+A "physical core" column is added to the CSV, and core usage is summarized
+per PBS array index: how many physical cores the index's runs landed on,
+how many of those cores took more than one run, and how many cores of the
+node went unused.  Pass --details to also list the reused cores.
+
+The summary is per array index because each index is one node's worth of
+work.  Two indices may report the same host, but they ran at different
+times on a node that was released and reallocated in between, so cores
+"shared" between two indices were never actually in contention.
 """
 import argparse
 import csv
@@ -100,6 +106,11 @@ def main():
         default="lscpu.txt",
         help="Path to lscpu output used to map cores to physical cores (default: lscpu.txt)",
     )
+    parser.add_argument(
+        "--details",
+        action="store_true",
+        help="List the individual reused cores, not just the per-index counts",
+    )
     args = parser.parse_args()
 
     pattern = os.path.join(args.directory, "step-*.out")
@@ -154,26 +165,85 @@ def main():
 
     print(f"Wrote {len(rows)} rows to {args.output}")
 
-    if cpu_to_physical is not None:
-        seen = defaultdict(list)
-        for row in rows:
-            if row["physical_core"] == "":
+    if cpu_to_physical is None:
+        return
+
+    cores_per_node = len(set(cpu_to_physical.values()))
+    summarize(rows, cores_per_node, args.details)
+
+
+def summarize(rows, cores_per_node, show_details):
+    """Report physical core usage, one line per PBS array index.
+
+    Each array index is one node's worth of steps, so "did two runs land on
+    the same physical core?" is only a meaningful question within a single
+    index.  Runs from different indices that report the same host ran at
+    different times, on a node released and reallocated in between.
+    """
+    by_index = defaultdict(list)
+    for row in rows:
+        if row["physical_core"] != "":
+            by_index[row["array_index"]].append(row)
+
+    if not by_index:
+        return
+
+    print()
+    print(f"Physical core usage per array index ({cores_per_node} cores/node):")
+    print()
+    print(f"  {'index':>5}  {'host':<10}  {'runs':>5}  {'used':>5}  {'reused':>6}  {'unused':>6}")
+    print(f"  {'-'*5}  {'-'*10}  {'-'*5}  {'-'*5}  {'-'*6}  {'-'*6}")
+
+    reused_by_index = {}
+    for index in sorted(by_index, key=int):
+        index_rows = by_index[index]
+
+        runs_per_core = defaultdict(list)
+        for row in index_rows:
+            runs_per_core[row["physical_core"]].append(row["run"])
+
+        reused = {c: r for c, r in runs_per_core.items() if len(r) > 1}
+        reused_by_index[index] = reused
+
+        used = len(runs_per_core)
+        unused = cores_per_node - used
+        hosts = ",".join(sorted({row["host"] for row in index_rows}))
+
+        print(
+            f"  {index:>5}  {hosts:<10}  {len(index_rows):>5}  {used:>5}  "
+            f"{len(reused):>6}  {unused:>6}"
+        )
+
+    print()
+    print("  used   = distinct physical cores the index's runs reported")
+    print("  reused = those cores that took more than one run")
+    print("  unused = cores of the node no run reported")
+
+    # A node can serve more than one array index, sequentially.  Say so, since
+    # it explains why the same host appears on several lines above.
+    indices_per_host = defaultdict(list)
+    for index in sorted(by_index, key=int):
+        for host in sorted({row["host"] for row in by_index[index]}):
+            indices_per_host[host].append(index)
+    shared = {h: i for h, i in indices_per_host.items() if len(i) > 1}
+    if shared:
+        print()
+        print("  note: these nodes served more than one array index, sequentially:")
+        for host, indices in sorted(shared.items()):
+            print(f"          {host} -> indices {', '.join(indices)}")
+        print("        Those indices ran at different times, on a node released and")
+        print("        reallocated in between, so cores they share were not contended.")
+
+    if show_details:
+        for index in sorted(reused_by_index, key=int):
+            reused = reused_by_index[index]
+            if not reused:
                 continue
-            seen[(row["host"], row["physical_core"])].append(row["run"])
-        conflicts = {k: v for k, v in seen.items() if len(v) > 1}
-        if conflicts:
-            print(
-                f"warning: found {len(conflicts)} physical core(s) reused "
-                f"on the same host:",
-                file=sys.stderr,
-            )
-            for (host, physical_core), runs in conflicts.items():
-                print(
-                    f"  host {host}, physical core {physical_core}: runs {', '.join(runs)}",
-                    file=sys.stderr,
-                )
-        else:
-            print("No repeated physical cores found on any host.")
+            print()
+            print(f"  array index {index}, {len(reused)} reused core(s):")
+            for core in sorted(reused, key=int):
+                runs = reused[core]
+                print(f"    physical core {core:>3}: {len(runs)} runs ({', '.join(runs)})")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # `launch_cf` Tutorial Examples
 
-These examples demonstrate how to use `launch_cf` on Derecho and show how processes are run and placed on nodes.
+These examples demonstrate how to use `launch_cf` on Derecho and show how processes are run and placed on nodes. First run `make hello_omp.exe` from the `examples` directory.
 
 ## Example 1: One Process Per Core with Multiple Nodes
 
@@ -11,4 +11,23 @@ gen_cmdfile.sh --nsteps 640 --exe "../hello_omp.exe" \
                 --output "derecho-640procs/cmdfile" \
                 --ppn 128 --nthreads 1
 ```
+from the `examples` directory. To run the job
+```
+$ cd derecho-640procs 
+$ ./submit_launch_cf.sh
+```
+This runs the five jobs from the job array and puts the output of each command in `stdout-<job number>`. 
 
+The `hello_omp.exe` executable produces a line, showing which ...
+For example, 
+```
+$ cat stdout-*/step-*10.out
+run 10 | host dec0869 | core 183 | thread 0 of 1 | PBS_ARRAY_INDEX=0
+run 110 | host dec0869 | core 24 | thread 0 of 1 | PBS_ARRAY_INDEX=0
+run 210 | host dec2384 | core 139 | thread 0 of 1 | PBS_ARRAY_INDEX=1
+run 310 | host dec0495 | core 196 | thread 0 of 1 | PBS_ARRAY_INDEX=2
+run 410 | host dec0869 | core 185 | thread 0 of 1 | PBS_ARRAY_INDEX=3
+run 510 | host dec0869 | core 185 | thread 0 of 1 | PBS_ARRAY_INDEX=3
+run 610 | host dec0495 | core 214 | thread 0 of 1 | PBS_ARRAY_INDEX=4
+```
+shows the placement of each run for run numbers ending in 10. From this you can see the PBS_ARRAY_INDEX changing and the corresponding host. The core will be placed according to the Linux scheduler. To see the distibution of the cores used, you can use the 
