@@ -4,14 +4,14 @@
 Usage: parse_steps.py <directory> [-o output.csv] [--lscpu lscpu.txt]
 
 Each step-*.out file is expected to contain a line like:
-    run 1 | host dec2452 | core 229 | thread 0 of 1 | PBS_ARRAY_INDEX=0
+    step 1 | host dec2452 | core 229 | thread 0 of 1 | PBS_ARRAY_INDEX=0
 
 If an lscpu.txt file (output of `lscpu`) is available, it is used to map
 each hardware thread ("core" above, i.e. a Linux CPU id) to its physical
 core, based on the "NUMA node<N> CPU(s):" lines and "Thread(s) per core:".
 A "physical core" column is added to the CSV, and core usage is summarized
-per PBS array index: how many physical cores the index's runs landed on,
-how many of those cores took more than one run, and how many cores of the
+per PBS array index: how many physical cores the index's steps landed on,
+how many of those cores took more than one step, and how many cores of the
 node went unused.  Pass --details to also list the reused cores.
 
 The summary is per array index because each index is one node's worth of
@@ -28,7 +28,7 @@ import sys
 from collections import defaultdict
 
 LINE_RE = re.compile(
-    r"run\s+(?P<run>\d+)\s*\|\s*"
+    r"step\s+(?P<step>\d+)\s*\|\s*"
     r"host\s+(?P<host>\S+)\s*\|\s*"
     r"core\s+(?P<core>\d+)\s*\|\s*"
     r"thread\s+(?P<thread>\d+)\s+of\s+\d+\s*\|\s*"
@@ -148,12 +148,12 @@ def main():
             parsed["physical_core"] = ""
         rows.append(parsed)
 
-    fieldnames = ["run", "host", "core", "thread", "array_index", "physical_core"]
+    fieldnames = ["step", "host", "core", "thread", "array_index", "physical_core"]
     with open(args.output, "w", newline="") as out:
         writer = csv.DictWriter(out, fieldnames=fieldnames)
         writer.writerow(
             {
-                "run": "run number",
+                "step": "step number",
                 "host": "host name",
                 "core": "core number",
                 "thread": "thread",
@@ -175,9 +175,9 @@ def main():
 def summarize(rows, cores_per_node, show_details):
     """Report physical core usage, one line per PBS array index.
 
-    Each array index is one node's worth of steps, so "did two runs land on
+    Each array index is one node's worth of steps, so "did two steps land on
     the same physical core?" is only a meaningful question within a single
-    index.  Runs from different indices that report the same host ran at
+    index.  Steps from different indices that report the same host ran at
     different times, on a node released and reallocated in between.
     """
     by_index = defaultdict(list)
@@ -191,21 +191,21 @@ def summarize(rows, cores_per_node, show_details):
     print()
     print(f"Physical core usage per array index ({cores_per_node} cores/node):")
     print()
-    print(f"  {'index':>5}  {'host':<10}  {'runs':>5}  {'used':>5}  {'reused':>6}  {'unused':>6}")
+    print(f"  {'index':>5}  {'host':<10}  {'steps':>5}  {'used':>5}  {'reused':>6}  {'unused':>6}")
     print(f"  {'-'*5}  {'-'*10}  {'-'*5}  {'-'*5}  {'-'*6}  {'-'*6}")
 
     reused_by_index = {}
     for index in sorted(by_index, key=int):
         index_rows = by_index[index]
 
-        runs_per_core = defaultdict(list)
+        steps_per_core = defaultdict(list)
         for row in index_rows:
-            runs_per_core[row["physical_core"]].append(row["run"])
+            steps_per_core[row["physical_core"]].append(row["step"])
 
-        reused = {c: r for c, r in runs_per_core.items() if len(r) > 1}
+        reused = {c: s for c, s in steps_per_core.items() if len(s) > 1}
         reused_by_index[index] = reused
 
-        used = len(runs_per_core)
+        used = len(steps_per_core)
         unused = cores_per_node - used
         hosts = ",".join(sorted({row["host"] for row in index_rows}))
 
@@ -215,9 +215,9 @@ def summarize(rows, cores_per_node, show_details):
         )
 
     print()
-    print("  used   = distinct physical cores the index's runs reported")
-    print("  reused = those cores that took more than one run")
-    print("  unused = cores of the node no run reported")
+    print("  used   = distinct physical cores the index's steps reported")
+    print("  reused = those cores that took more than one step")
+    print("  unused = cores of the node no step reported")
 
     # A node can serve more than one array index, sequentially.  Say so, since
     # it explains why the same host appears on several lines above.
@@ -242,8 +242,8 @@ def summarize(rows, cores_per_node, show_details):
             print()
             print(f"  array index {index}, {len(reused)} reused core(s):")
             for core in sorted(reused, key=int):
-                runs = reused[core]
-                print(f"    physical core {core:>3}: {len(runs)} runs ({', '.join(runs)})")
+                steps = reused[core]
+                print(f"    physical core {core:>3}: {len(steps)} steps ({', '.join(steps)})")
 
 
 if __name__ == "__main__":
