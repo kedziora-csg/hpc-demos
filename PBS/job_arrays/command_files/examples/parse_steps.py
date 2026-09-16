@@ -4,14 +4,14 @@
 Usage: parse_steps.py <directory> [-o output.csv] [--lscpu lscpu.txt]
 
 Each step-*.out file is expected to contain a line like:
-    job 1 | host dec2452 | core 229 | thread 0 of 1 | PBS_ARRAY_INDEX=0
+    run 1 | host dec2452 | core 229 | thread 0 of 1 | PBS_ARRAY_INDEX=0
 
 If an lscpu.txt file (output of `lscpu`) is available, it is used to map
 each hardware thread ("core" above, i.e. a Linux CPU id) to its physical
 core, based on the "NUMA node<N> CPU(s):" lines and "Thread(s) per core:".
 A "physical core" column is added to the CSV, and a warning is printed to
 stderr for any host that reuses the same physical core across more than
-one job (i.e. two jobs scheduled onto sibling hardware threads).
+one run (i.e. two runs scheduled onto sibling hardware threads).
 """
 import argparse
 import csv
@@ -22,7 +22,7 @@ import sys
 from collections import defaultdict
 
 LINE_RE = re.compile(
-    r"job\s+(?P<job>\d+)\s*\|\s*"
+    r"run\s+(?P<run>\d+)\s*\|\s*"
     r"host\s+(?P<host>\S+)\s*\|\s*"
     r"core\s+(?P<core>\d+)\s*\|\s*"
     r"thread\s+(?P<thread>\d+)\s+of\s+\d+\s*\|\s*"
@@ -137,12 +137,12 @@ def main():
             parsed["physical_core"] = ""
         rows.append(parsed)
 
-    fieldnames = ["job", "host", "core", "thread", "array_index", "physical_core"]
+    fieldnames = ["run", "host", "core", "thread", "array_index", "physical_core"]
     with open(args.output, "w", newline="") as out:
         writer = csv.DictWriter(out, fieldnames=fieldnames)
         writer.writerow(
             {
-                "job": "job number",
+                "run": "run number",
                 "host": "host name",
                 "core": "core number",
                 "thread": "thread",
@@ -159,7 +159,7 @@ def main():
         for row in rows:
             if row["physical_core"] == "":
                 continue
-            seen[(row["host"], row["physical_core"])].append(row["job"])
+            seen[(row["host"], row["physical_core"])].append(row["run"])
         conflicts = {k: v for k, v in seen.items() if len(v) > 1}
         if conflicts:
             print(
@@ -167,9 +167,9 @@ def main():
                 f"on the same host:",
                 file=sys.stderr,
             )
-            for (host, physical_core), jobs in conflicts.items():
+            for (host, physical_core), runs in conflicts.items():
                 print(
-                    f"  host {host}, physical core {physical_core}: jobs {', '.join(jobs)}",
+                    f"  host {host}, physical core {physical_core}: runs {', '.join(runs)}",
                     file=sys.stderr,
                 )
         else:
