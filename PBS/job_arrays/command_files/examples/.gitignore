@@ -1,0 +1,11 @@
+# build product - an architecture-specific binary, rebuild with "make"
+hello_omp.exe
+*.o
+*~
+
+# job output
+stdout-*
+steps.csv
+launch_cf.log
+launch_cf.*.pbs
+launch_cf.o*

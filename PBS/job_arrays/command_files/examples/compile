@@ -1,0 +1,1 @@
+CC -qopenmp -o hello_omp.exe hello_omp.cpp
