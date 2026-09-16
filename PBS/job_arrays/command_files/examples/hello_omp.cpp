@@ -1,6 +1,6 @@
 // hello_omp.cpp -- minimal OpenMP "hello world" for a launch_cf command file.
 //
-// Takes one integer on the command line (the job/step number) and has every
+// Takes one integer on the command line (the run/step number) and has every
 // OpenMP thread report itself.
 //
 // Build:  CC -fopenmp -o hello_omp.exe hello_omp.cpp     (Derecho, Cray wrapper)
@@ -17,13 +17,13 @@
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
-        std::cerr << "usage: " << argv[0] << " <job_number>\n";
+        std::cerr << "usage: " << argv[0] << " <run_number>\n";
         return 1;
     }
 
-    int job = 0;
+    int run = 0;
     try {
-        job = std::stoi(argv[1]);
+        run = std::stoi(argv[1]);
     } catch (const std::exception &) {
         std::cerr << "error: '" << argv[1] << "' is not an integer\n";
         return 1;
@@ -48,7 +48,7 @@ int main(int argc, char *argv[]) {
         // Serialize the writes so lines from different threads don't interleave.
 #pragma omp critical
         {
-            std::cout << "job " << job << " | host " << hostname << " | core " << cpu 
+            std::cout << "run " << run << " | host " << hostname << " | core " << cpu 
                       << " | thread " << tid << " of " << nthreads;
             if (array_index) std::cout << " | PBS_ARRAY_INDEX=" << array_index;
             std::cout << std::endl;
