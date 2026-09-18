@@ -22,12 +22,37 @@ The `hello_omp.exe` executable produces a line, showing which ...
 For example, 
 ```
 $ cat stdout-*/step-*10.out
-step 10 | host dec0869 | core 183 | thread 0 of 1 | PBS_ARRAY_INDEX=0
-step 110 | host dec0869 | core 24 | thread 0 of 1 | PBS_ARRAY_INDEX=0
-step 210 | host dec2384 | core 139 | thread 0 of 1 | PBS_ARRAY_INDEX=1
-step 310 | host dec0495 | core 196 | thread 0 of 1 | PBS_ARRAY_INDEX=2
-step 410 | host dec0869 | core 185 | thread 0 of 1 | PBS_ARRAY_INDEX=3
-step 510 | host dec0869 | core 185 | thread 0 of 1 | PBS_ARRAY_INDEX=3
-step 610 | host dec0495 | core 214 | thread 0 of 1 | PBS_ARRAY_INDEX=4
+step 10 | host dec0993 | core 86 | thread 0 of 1 | PBS_ARRAY_INDEX=0
+step 110 | host dec0993 | core 23 | thread 0 of 1 | PBS_ARRAY_INDEX=0
+step 210 | host dec1844 | core 115 | thread 0 of 1 | PBS_ARRAY_INDEX=1
+step 310 | host dec1844 | core 103 | thread 0 of 1 | PBS_ARRAY_INDEX=2
+step 410 | host dec0993 | core 80 | thread 0 of 1 | PBS_ARRAY_INDEX=3
+step 510 | host dec0993 | core 113 | thread 0 of 1 | PBS_ARRAY_INDEX=3
+step 610 | host dec1844 | core 223 | thread 0 of 1 | PBS_ARRAY_INDEX=4
 ```
-shows the placement of each step for step numbers ending in 10. From this you can see the PBS_ARRAY_INDEX changing and the corresponding host. The core will be placed according to the Linux scheduler. To see the distibution of the cores used, you can use the 
+shows the placement of each step for step numbers ending in 10. From this you can see the PBS_ARRAY_INDEX changing and the corresponding host. The core will be placed according to the Linux scheduler. To see the distibution of the cores used, you can use the `parse_steps.py` script. For example, from the `derecho-640procs` directory, our particular run gives the following.
+```
+$ python3 ../parse_steps.py stdout-7495572.desched1 --lscpu lscpu.txt -o steps.csv
+Wrote 640 rows to steps.csv
+
+Physical core usage per array index (128 cores/node):
+
+  index  host        steps   used  reused  unused
+  -----  ----------  -----  -----  ------  ------
+      0  dec0993       128     53      26      75
+      1  dec1844       128     55      24      73
+      2  dec1844       128     51      23      77
+      3  dec0993       128     56      24      72
+      4  dec1844       128     40      19      88
+
+  used   = distinct physical cores the index's steps reported
+  reused = those cores that took more than one step
+  unused = cores of the node no step reported
+
+  note: these nodes served more than one array index, sequentially:
+          dec0993 -> indices 0, 3
+          dec1844 -> indices 1, 2, 4
+        Those indices ran at different times, on a node released and
+        reallocated in between, so cores they share were not contended.
+```
+The `hello_omp.exe` program is runs very quickly, and the Linux scheduler is repeatedly reusing some cores. 

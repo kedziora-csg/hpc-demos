@@ -371,7 +371,15 @@ echo "Found n_total_steps=${n_total_steps} in ${command_file}"
 
 # when the command file has fewer steps than our ${steps_per_node}, adjust.
 [ ${n_total_steps} -lt ${steps_per_node} ] && steps_per_node=${n_total_steps}
-[ ${n_total_steps} -lt ${ppn} ]            && ppn=${n_total_steps}
+
+# ...then size the CPU request to the work a node will actually run.  This is the
+# inverse of the check in parse_args(), which *raises* ${ppn} to cover
+# ${steps_per_node}*${threads_per_step}; here we lower it when the arguments, or a
+# short command file, leave us asking for more CPUs than we can use.  Note this
+# must compare CPUs against CPUs: clamping ${ppn} to ${n_total_steps} instead
+# under-requests whenever a step uses more than one thread, and PBS confines the
+# job to the CPUs it requested.
+[ $(( ${steps_per_node} * ${threads_per_step} )) -lt ${ppn} ] && ppn=$(( ${steps_per_node} * ${threads_per_step} ))
 
 #------------------------------------------------------------------
 njobs=$(( ${n_total_steps} / ${steps_per_node} ))
