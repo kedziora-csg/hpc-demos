@@ -18,11 +18,11 @@ CXXFLAGS ?= -O2
 OMPFLAGS ?= -fopenmp
 PYTHON   ?= python3
 
-launch_cf ?= ../../launch_cf
+launch_cf ?= launch_cf
 
 # Each example directory holds its own cmdfile and submission script.
-EXAMPLES := derecho-640procs
-CMDFILES := $(addsuffix /cmdfile,$(EXAMPLES))
+EXAMPLES := derecho-640procs threaded-apps
+CMDFILES := $(addsuffix /cmdfile,$(EXAMPLES)) threaded-apps/cmdfile.numactl
 
 all: hello_omp.exe $(CMDFILES)
 
@@ -36,6 +36,14 @@ cmdfiles: $(CMDFILES)
 # Add further examples by copying this rule with a different step count.
 derecho-640procs/cmdfile: gen_cmdfile.sh Makefile
 	./gen_cmdfile.sh --nsteps 640 --exe ../hello_omp.exe --output $@
+
+# 16 steps of a 16-thread application: 8 steps/node -> a 2-element array.
+# Two command files, identical except that one pins each step to a NUMA domain.
+threaded-apps/cmdfile: gen_cmdfile.sh Makefile
+	./gen_cmdfile.sh --nsteps 16 --nthreads 16 --exe ../hello_omp.exe --output $@
+
+threaded-apps/cmdfile.numactl: gen_cmdfile_numactl.sh
+	./gen_cmdfile_numactl.sh $@
 
 submit: all
 	cd derecho-640procs && ./submit_launch_cf.sh
@@ -62,6 +70,7 @@ clobber: clean
 	rm -rf $(addsuffix /stdout-*,$(EXAMPLES))
 	rm -f $(addsuffix /steps.csv,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.log,$(EXAMPLES))
+	rm -f $(addsuffix /launch_cf.numactl.log,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.*.pbs,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.o*,$(EXAMPLES))
 

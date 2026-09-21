@@ -9,10 +9,16 @@ Each step-*.out file is expected to contain a line like:
 If an lscpu.txt file (output of `lscpu`) is available, it is used to map
 each hardware thread ("core" above, i.e. a Linux CPU id) to its physical
 core, based on the "NUMA node<N> CPU(s):" lines and "Thread(s) per core:".
-A "physical core" column is added to the CSV, and core usage is summarized
-per PBS array index: how many physical cores the index's steps landed on,
-how many of those cores took more than one step, and how many cores of the
-node went unused.  Pass --details to also list the reused cores.
+"physical core" and "numa domain" columns are added to the CSV, and usage is
+summarized per PBS array index: how many physical cores the index's threads
+landed on, how many of those cores took more than one thread, and how many
+cores of the node went unused.  Pass --details to also list the reused cores.
+
+Every thread of every step is recorded, so a multi-threaded step produces one
+row per thread.  For those runs the summary also reports how many steps kept
+all of their threads inside a single NUMA domain -- the difference between a
+command file whose steps are prefixed with "numactl --cpunodebind=N" and one
+that leaves placement to the Linux scheduler.
 
 The summary is per array index because each index is one node's worth of
 work.  Two indices may report the same host, but they ran at different
@@ -71,7 +77,8 @@ def parse_lscpu(path):
         raise ValueError(f"could not find NUMA/thread info in {path}")
 
     cpu_to_physical = {}
-    for cpu_list in node_lines:
+    cpu_to_numa = {}
+    for domain, cpu_list in enumerate(node_lines):
         ranges = [expand_range(tok) for tok in cpu_list.split(",")]
         if len(ranges) != threads_per_core:
             raise ValueError(
@@ -83,16 +90,19 @@ def parse_lscpu(path):
             physical = ranges[0][pos]
             for r in ranges:
                 cpu_to_physical[r[pos]] = physical
-    return cpu_to_physical
+                cpu_to_numa[r[pos]] = domain
+    return cpu_to_physical, cpu_to_numa
 
 
 def parse_file(path):
+    """Return one dict per matching line -- i.e. one per thread of the step."""
+    found = []
     with open(path) as f:
         for line in f:
             m = LINE_RE.search(line)
             if m:
-                return m.groupdict()
-    return None
+                found.append(m.groupdict())
+    return found
 
 
 def main():
@@ -119,9 +129,9 @@ def main():
         print(f"No files matching {pattern}", file=sys.stderr)
         sys.exit(1)
 
-    cpu_to_physical = None
+    cpu_to_physical = cpu_to_numa = None
     if os.path.exists(args.lscpu):
-        cpu_to_physical = parse_lscpu(args.lscpu)
+        cpu_to_physical, cpu_to_numa = parse_lscpu(args.lscpu)
     else:
         print(
             f"warning: {args.lscpu} not found, skipping physical core mapping",
@@ -130,25 +140,26 @@ def main():
 
     rows = []
     for path in files:
-        parsed = parse_file(path)
-        if parsed is None:
+        found = parse_file(path)
+        if not found:
             print(f"warning: no match found in {path}", file=sys.stderr)
             continue
-        if cpu_to_physical is not None:
-            core = int(parsed["core"])
-            if core not in cpu_to_physical:
-                print(
-                    f"warning: core {core} in {path} not found in {args.lscpu}",
-                    file=sys.stderr,
-                )
-                parsed["physical_core"] = ""
-            else:
-                parsed["physical_core"] = cpu_to_physical[core]
-        else:
+        for parsed in found:
             parsed["physical_core"] = ""
-        rows.append(parsed)
+            parsed["numa_domain"] = ""
+            if cpu_to_physical is not None:
+                core = int(parsed["core"])
+                if core not in cpu_to_physical:
+                    print(
+                        f"warning: core {core} in {path} not found in {args.lscpu}",
+                        file=sys.stderr,
+                    )
+                else:
+                    parsed["physical_core"] = cpu_to_physical[core]
+                    parsed["numa_domain"] = cpu_to_numa[core]
+            rows.append(parsed)
 
-    fieldnames = ["step", "host", "core", "thread", "array_index", "physical_core"]
+    fieldnames = ["step", "host", "core", "thread", "array_index", "physical_core", "numa_domain"]
     with open(args.output, "w", newline="") as out:
         writer = csv.DictWriter(out, fieldnames=fieldnames)
         writer.writerow(
@@ -159,6 +170,7 @@ def main():
                 "thread": "thread",
                 "array_index": "array index",
                 "physical_core": "physical core",
+                "numa_domain": "numa domain",
             }
         )
         writer.writerows(rows)
@@ -188,36 +200,64 @@ def summarize(rows, cores_per_node, show_details):
     if not by_index:
         return
 
+    # a step contributes one row per thread; threaded runs get the NUMA column
+    threads_per_step = max(
+        len([r for r in rows if r["array_index"] == i and r["step"] == st])
+        for i in by_index
+        for st in {r["step"] for r in by_index[i]}
+    )
+    threaded = threads_per_step > 1
+
     print()
     print(f"Physical core usage per array index ({cores_per_node} cores/node):")
     print()
-    print(f"  {'index':>5}  {'host':<10}  {'steps':>5}  {'used':>5}  {'reused':>6}  {'unused':>6}")
-    print(f"  {'-'*5}  {'-'*10}  {'-'*5}  {'-'*5}  {'-'*6}  {'-'*6}")
+    head = f"  {'index':>5}  {'host':<10}  {'steps':>5}  {'thrds':>5}  {'used':>5}  {'reused':>6}  {'unused':>6}"
+    rule = f"  {'-'*5}  {'-'*10}  {'-'*5}  {'-'*5}  {'-'*5}  {'-'*6}  {'-'*6}"
+    if threaded:
+        head += f"  {'1-domain steps':>14}"
+        rule += f"  {'-'*14}"
+    print(head)
+    print(rule)
 
     reused_by_index = {}
     for index in sorted(by_index, key=int):
         index_rows = by_index[index]
 
-        steps_per_core = defaultdict(list)
+        threads_per_core = defaultdict(list)
         for row in index_rows:
-            steps_per_core[row["physical_core"]].append(row["step"])
+            threads_per_core[row["physical_core"]].append(row["step"])
 
-        reused = {c: s for c, s in steps_per_core.items() if len(s) > 1}
+        reused = {c: s for c, s in threads_per_core.items() if len(s) > 1}
         reused_by_index[index] = reused
 
-        used = len(steps_per_core)
+        used = len(threads_per_core)
         unused = cores_per_node - used
         hosts = ",".join(sorted({row["host"] for row in index_rows}))
 
-        print(
-            f"  {index:>5}  {hosts:<10}  {len(index_rows):>5}  {used:>5}  "
+        # how many NUMA domains did each step's threads land in?
+        domains_per_step = defaultdict(set)
+        for row in index_rows:
+            if row["numa_domain"] != "":
+                domains_per_step[row["step"]].add(row["numa_domain"])
+        steps = len(domains_per_step) or len({r["step"] for r in index_rows})
+        confined = sum(1 for d in domains_per_step.values() if len(d) == 1)
+
+        line = (
+            f"  {index:>5}  {hosts:<10}  {steps:>5}  {len(index_rows):>5}  {used:>5}  "
             f"{len(reused):>6}  {unused:>6}"
         )
+        if threaded:
+            line += f"  {f'{confined} of {steps}':>14}"
+        print(line)
 
     print()
-    print("  used   = distinct physical cores the index's steps reported")
-    print("  reused = those cores that took more than one step")
-    print("  unused = cores of the node no step reported")
+    print("  thrds  = thread records, i.e. steps x threads/step")
+    print("  used   = distinct physical cores the index's threads reported")
+    print("  reused = those cores that took more than one thread")
+    print("  unused = cores of the node no thread reported")
+    if threaded:
+        print("  1-domain steps = steps whose threads all stayed in one NUMA domain;")
+        print("                   this is what \"numactl --cpunodebind\" buys you")
 
     # A node can serve more than one array index, sequentially.  Say so, since
     # it explains why the same host appears on several lines above.

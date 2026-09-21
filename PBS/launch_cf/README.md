@@ -2,6 +2,22 @@
 
 Multiple Program, Multiple Data (MPMD) jobs run multiple independent, typically serial executables simultaneously. Such jobs can easily be dispatched with PBS job arrays, even on machines like Derecho where compute nodes are exclusively and entirely assigned to a users' job.
 
+# Where `launch_cf` Comes From
+
+`launch_cf` is maintained in the [NCAR/pbstools](https://github.com/NCAR/pbstools) repository,
+alongside `qcmd` and `qinteractive`, and CSG installs it on both Derecho and Casper so that it
+is already on your default `PATH`.  Nothing needs to be built or cloned to use it:
+
+```
+$ which launch_cf
+```
+
+This directory carries **no copy of its own**, deliberately — every example below invokes
+whichever `launch_cf` your environment provides, so the tutorial cannot drift from the supported
+version.  Changes to the tool itself, and the tests that cover them, belong in
+[NCAR/pbstools](https://github.com/NCAR/pbstools) (`bin/launch_cf`, `share/launch_cf.pbs`, and
+`tests/`), not here.
+
 The `launch_cf` tool reads in a command file that contains applications to run within the job array.  Each line of the command file will be assigned to an index of the job array when using default arguments.  Multiple CPUs can be assigned per line using the `nthreads|threads-per-step` argument and will assign an index to each chunk of CPUs used for each step.
 
 # Command File

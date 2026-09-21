@@ -1,6 +1,13 @@
 # `launch_cf` Tutorial Examples
 
-These examples demonstrate how to use `launch_cf` on Derecho and show how processes are run and placed on nodes. First run `make hello_omp.exe` from the `examples` directory.
+These examples demonstrate how to use `launch_cf` on Derecho and show how processes are run and placed on nodes.
+
+`launch_cf` itself comes from your default `PATH` — CSG installs it on Derecho and Casper from the
+[NCAR/pbstools](https://github.com/NCAR/pbstools) repository, so there is nothing to build or clone,
+and `which launch_cf` will show the copy you are using. This directory holds only the example inputs
+and the scripts that generate and analyze them.
+
+First run `make hello_omp.exe` from the `examples` directory.
 
 ## Example 1: One Process Per Core with Multiple Nodes
 
