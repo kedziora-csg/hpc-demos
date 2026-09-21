@@ -1,9 +1,0 @@
-Found n_total_steps=16 in ./cmdfile.numactl
- -> ppn=128
- -> threads_per_step=16
- -> steps_per_node=8
- -> n_total_steps=16
- -> njobs=1
-Running 2 jobs with 8 steps / node on NCAR resource derecho
-+ qsub -v command_file=./cmdfile.numactl,n_total_steps=16,max_start_delay=0 -r y -q main -l select=1:ncpus=128:mpiprocs=8:ompthreads=16:mem=235G -J 0-1 -A SCSG0001 -l walltime=00:10:00 /glade/u/apps/opt/pbstools/bin/../share/launch_cf.pbs
-7558167[].desched1
