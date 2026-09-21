@@ -25,7 +25,16 @@
 # launch_cf hands out steps to nodes in blocks of "steps per node", so the
 # domain number simply cycles 0,1,...,7,0,1,... down the command file.
 #
-# Usage:  ./gen_cmdfile_numactl.sh [output file]     (default ./cmdfile.numactl)
+# numactl picks the domain, but it does not say which core inside that domain
+# each thread runs on -- the scheduler can still put two threads of a step on one
+# core and leave another idle.  Passing "bind" as the second argument also emits
+#
+#     OMP_PROC_BIND=close OMP_PLACES=cores
+#
+# in front of each step, which gives every thread its own physical core.
+#
+# Usage:  ./gen_cmdfile_numactl.sh [output file] [bind]
+#           default output: ./cmdfile.numactl
 
 #------------------------------------------------------------------
 # edit these four values to match the job you intend to submit
@@ -37,8 +46,15 @@ exe="../hello_omp.exe"       # the program each step runs
 
 output="${1:-./cmdfile.numactl}"
 
+# with "bind", each step also gets one thread per physical core in its domain
+prefix=""
+[ "${2}" = "bind" ] && prefix="OMP_PROC_BIND=close OMP_PLACES=cores "
+
 {
     echo "# ${nsteps} steps, pinned one per NUMA domain."
+    if [ -n "${prefix}" ]; then
+        echo "# Each step also binds one thread per physical core."
+    fi
     echo "#"
     echo "# Submit with:"
     echo "#   launch_cf -A \$PBS_ACCOUNT -l walltime=00:10:00 \\"
@@ -49,9 +65,12 @@ output="${1:-./cmdfile.numactl}"
     for step in $(seq 1 ${nsteps}); do
         # steps 1..8 go to domains 0..7, then the numbering starts over
         domain=$(( (step - 1) % domains ))
-        echo "numactl --cpunodebind=${domain} --membind=${domain} ${exe} ${step}"
+        echo "${prefix}numactl --cpunodebind=${domain} --membind=${domain} ${exe} ${step}"
     done
 } > "${output}"
 
 echo "Wrote ${nsteps} pinned steps to ${output}"
 echo " -> ${domains} steps/node, ${threads} threads/step, one NUMA domain each"
+if [ -n "${prefix}" ]; then
+    echo " -> plus OMP_PROC_BIND=close OMP_PLACES=cores, one thread per core"
+fi

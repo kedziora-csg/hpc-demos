@@ -22,7 +22,8 @@ launch_cf ?= launch_cf
 
 # Each example directory holds its own cmdfile and submission script.
 EXAMPLES := derecho-640procs threaded-apps
-CMDFILES := $(addsuffix /cmdfile,$(EXAMPLES)) threaded-apps/cmdfile.numactl
+CMDFILES := $(addsuffix /cmdfile,$(EXAMPLES)) \
+            threaded-apps/cmdfile.numactl threaded-apps/cmdfile.numactl_bind
 
 all: hello_omp.exe $(CMDFILES)
 
@@ -44,6 +45,10 @@ threaded-apps/cmdfile: gen_cmdfile.sh Makefile
 
 threaded-apps/cmdfile.numactl: gen_cmdfile_numactl.sh
 	./gen_cmdfile_numactl.sh $@
+
+# ...and the same again, additionally binding one thread per physical core.
+threaded-apps/cmdfile.numactl_bind: gen_cmdfile_numactl.sh
+	./gen_cmdfile_numactl.sh $@ bind
 
 submit: all
 	cd derecho-640procs && ./submit_launch_cf.sh
@@ -71,6 +76,7 @@ clobber: clean
 	rm -f $(addsuffix /steps.csv,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.log,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.numactl.log,$(EXAMPLES))
+	rm -f $(addsuffix /launch_cf.numactl_bind.log,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.*.pbs,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.o*,$(EXAMPLES))
 
