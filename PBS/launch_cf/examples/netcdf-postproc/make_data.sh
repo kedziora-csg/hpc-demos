@@ -1,70 +1,82 @@
 #!/bin/bash
 #
-# Build the input files this example processes, by slicing one large NetCDF
-# file into many small ones -- one per time step.
+# Stage the input files this example processes.
 #
-# The source defaults to an hourly ERA5 file from the NSF NCAR Geoscience Data
-# Exchange (GDEX, dataset d633000), which is netCDF-4 and readable on GLADE from
-# any NCAR system.  Point SRC somewhere else if you prefer:
+# ERA5 lives on GLADE in the NSF NCAR Geoscience Data Exchange (GDEX, formerly
+# the RDA) as dataset d633000.  Its files are already one-file-per-variable-per
+# -period, which is exactly the shape a command file wants, so rather than
+# building inputs we simply point at a set of them.
 #
-#   SRC=/glade/derecho/scratch/$USER/my_output.nc ./make_data.sh
+# By default this makes symlinks, so it costs no space and takes no time.  Set
+# COPY=1 to copy instead, e.g. if you would rather not read campaign storage
+# from the compute nodes.
 #
-# Run ./check_data.sh first -- it locates the dataset on GLADE and prints the
-# SRC line to use.
+# Run ./check_data.sh first; it locates the dataset and reports what is there.
+#
+#   ./make_data.sh                      # 128 files from the default product
+#   NFILES=256 ./make_data.sh           # more steps
+#   PRODUCT=e5.oper.an.sfc ./make_data.sh
+#   COPY=1 ./make_data.sh               # stage real copies into ./data
+#   SRCDIR=/some/other/dir ./make_data.sh
 
 set -u
 
-# The Geoscience Data Exchange (GDEX, formerly the RDA) keeps ERA5 on GLADE as
-# dataset d633000.  The collection moved and was renamed, so rather than hard
-# coding one path we look in the places it is known to live and take the first
-# NetCDF file we find.  Run ./check_data.sh first: it reports exactly what is
-# there and prints the SRC= line to paste here or set in the environment.
 DSID="${DSID:-d633000}"
+# e5.oper.fc.sfc.meanflux files are ~73 MB, big enough for the steps to be
+# I/O bound without making the example take an hour.  e5.oper.an.sfc holds the
+# hourly surface analyses, but those files are several GB each.
+PRODUCT="${PRODUCT:-e5.oper.fc.sfc.meanflux}"
+OUTDIR="${OUTDIR:-./data}"
+NFILES="${NFILES:-128}"
 
-if [ -z "${SRC:-}" ]; then
+# find the dataset: GDEX is canonical, the others are kept for compatibility
+if [ -z "${SRCDIR:-}" ]; then
     for root in /glade/campaign/collections/gdex/data /gdex/data \
                 /glade/campaign/collections/rda/data; do
-        [ -d "${root}/${DSID}" ] || continue
-        SRC=$(find "${root}/${DSID}" -name '*.nc' -print -quit 2>/dev/null)
-        [ -n "${SRC}" ] && break
+        if [ -d "${root}/${DSID}/${PRODUCT}" ]; then
+            SRCDIR="${root}/${DSID}/${PRODUCT}"
+            break
+        fi
     done
 fi
-SRC="${SRC:-}"
+SRCDIR="${SRCDIR:-}"
 
-OUTDIR="${OUTDIR:-./data}"
-NSLICES="${NSLICES:-256}"
-
-command -v ncks >/dev/null || { echo "ERROR: ncks not found -- try \"module load nco\""; exit 1; }
-
-if [ -z "${SRC}" ] || [ ! -r "${SRC}" ]; then
+if [ -z "${SRCDIR}" ] || [ ! -d "${SRCDIR}" ]; then
     cat <<MSG
-ERROR: cannot read the source file
+ERROR: cannot find ${DSID}/${PRODUCT} on GLADE.
 
-    ${SRC}
-
-Set SRC to a NetCDF file you can read, e.g.
-
-    SRC=/glade/campaign/collections/rda/data/ds633.0/... ./make_data.sh
-
-Run ./check_data.sh to locate the data, or search the dataset id at
+Run ./check_data.sh to see what is available, or search the dataset id at
 https://gdex.ucar.edu and follow Data Access -> NCAR HPC Data Access.
+Set SRCDIR to a directory of NetCDF files to use something else.
 MSG
     exit 1
 fi
 
 mkdir -p "${OUTDIR}"
 
-echo "Slicing ${NSLICES} time steps out of"
-echo "  ${SRC}"
-echo "into ${OUTDIR}/ ..."
+echo "Staging up to ${NFILES} files from"
+echo "  ${SRCDIR}"
 
-for i in $(seq 0 $(( NSLICES - 1 ))); do
-    out=$(printf "%s/slice_%05d.nc" "${OUTDIR}" "${i}")
-    [ -f "${out}" ] && continue          # already built; delete ./data to start over
-    ncks -O -d time,${i},${i} "${SRC}" "${out}" || {
-        echo "ERROR: ncks failed on time index ${i} -- does the source have ${NSLICES} time steps?"
-        exit 1
-    }
-done
+n=0
+while read -r f; do
+    [ ${n} -ge ${NFILES} ] && break
+    dest="${OUTDIR}/$(basename "${f}")"
+    if [ -e "${dest}" ] || [ -L "${dest}" ]; then
+        n=$(( n + 1 )); continue
+    fi
+    if [ -n "${COPY:-}" ]; then
+        cp "${f}" "${dest}"
+    else
+        ln -s "${f}" "${dest}"
+    fi
+    n=$(( n + 1 ))
+done < <(find "${SRCDIR}" -name '*.nc' | sort)
 
-echo "Wrote $(ls -1 ${OUTDIR}/slice_*.nc | wc -l) files, $(du -sh ${OUTDIR} | cut -f1) total"
+staged=$(ls -1 "${OUTDIR}" | wc -l | tr -d ' ')
+if [ "${staged}" -eq 0 ]; then
+    echo "ERROR: no .nc files found under ${SRCDIR}"
+    exit 1
+fi
+echo "Staged ${staged} files in ${OUTDIR}/ ($([ -n "${COPY:-}" ] && echo copies || echo symlinks))"
+[ "${staged}" -lt "${NFILES}" ] && echo "  (only ${staged} available; asked for ${NFILES})"
+exit 0

@@ -1,0 +1,47 @@
+== 1. locating d633000 ==========================================
+   found: /glade/campaign/collections/gdex/data/d633000
+   found: /gdex/data/d633000
+   found: /glade/campaign/collections/rda/data/d633000
+
+== 2. what is under /glade/campaign/collections/rda/data/d633000 =============================
+catalogs
+d633000.gps
+d633000.sfc.zarr.inf
+d633000.vinteg.zarr.inf
+e5.oper.an.pl
+e5.oper.an.sfc
+e5.oper.an.sfc.zarr
+e5.oper.an.vinteg
+e5.oper.an.vinteg.zarr
+e5.oper.fc.sfc.accumu
+e5.oper.fc.sfc.instan
+e5.oper.fc.sfc.meanflux
+e5.oper.fc.sfc.minmax
+e5.oper.invariant
+index.html
+kerchunk
+x
+y
+   -- gdexls says:
+Dd633000  908.49T  807209  ERA5 Reanalysis (0.25 Degree Latitude-Longitude Grid)
+
+== 3. a sample file =============================================
+   /glade/campaign/collections/rda/data/d633000/e5.oper.fc.sfc.meanflux/202207/e5.oper.fc.sfc.meanflux.235_023_mser.ll025sc.2022070106_2022071606.nc
+   size: 73M
+
+   variables in it:
+	float MSER(forecast_initial_time, forecast_hour, latitude, longitude) ;
+	int forecast_hour(forecast_hour) ;
+	int forecast_initial_time(forecast_initial_time) ;
+	double latitude(latitude) ;
+	double longitude(longitude) ;
+	int utc_date(forecast_initial_time) ;
+
+   dimensions:
+	forecast_initial_time = UNLIMITED ; // (30 currently)
+	forecast_hour = 12 ;
+	latitude = 721 ;
+	longitude = 1440 ;
+
+== 4. put this in make_data.sh ==================================
+   SRC="/glade/campaign/collections/rda/data/d633000/e5.oper.fc.sfc.meanflux/202207/e5.oper.fc.sfc.meanflux.235_023_mser.ll025sc.2022070106_2022071606.nc"

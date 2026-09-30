@@ -2,7 +2,7 @@
 #
 # Write a command file with one step per input NetCDF file.
 #
-# Each step runs ./process_file.sh, which extracts several variables from its
+# Each step runs ./process_file.sh, which runs several NCO operations over its
 # file at the same time (see the comments there).
 #
 # Passing "pin" as the second argument prefixes every step with
@@ -31,8 +31,8 @@ if [ "${2:-}" = "pin" ]; then
     pin="yes"
 fi
 
-files=( ${datadir}/slice_*.nc )
-if [ ! -r "${files[0]}" ]; then
+files=( ${datadir}/*.nc )
+if [ ${#files[@]} -eq 0 ] || [ ! -r "${files[0]}" ]; then
     echo "ERROR: no input files in ${datadir}/ -- run ./make_data.sh first"
     exit 1
 fi
