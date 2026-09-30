@@ -69,17 +69,34 @@ fi
 # and if it exceeds the node, the job takes the node down rather than failing
 # politely.  So measure one operation instead of guessing, and refuse to write a
 # command file that cannot fit.  FORCE=1 overrides.
-peak_kb=""
-if command -v /usr/bin/time >/dev/null && command -v ncra >/dev/null; then
-    peak_kb=$(/usr/bin/time -f "%M" ncra -O "${files[0]}" /dev/null 2>&1 | tail -1)
-    case "${peak_kb}" in ''|*[!0-9]*) peak_kb="" ;; esac
+# Measure every operation and add them up: a step runs all three at once, and a
+# node runs ${steps_per_node} steps at once.  All three stream here, so each
+# costs a few hundred MB regardless of input size -- but measure rather than
+# assume, because not every NCO operator streams (ncwa loads the whole array
+# and needs roughly 10x its size).
+step_kb=0
+measured=""
+if [ -x /usr/bin/time ] && command -v ncra >/dev/null; then
+    probe="${files[0]}"
+    tmp=$(mktemp -d)
+    for op in "ncra -O" \
+              "ncks -O -d latitude,20.,60. -d longitude,230.,300." \
+              "ncks -O -4 -L 1"; do
+        kb=$(/usr/bin/time -f "%M" ${op} "${probe}" "${tmp}/probe.nc" 2>&1 >/dev/null | tail -1)
+        case "${kb}" in ''|*[!0-9]*) continue ;; esac
+        printf "  %-42s %6.2f GB\n" "${op}" "$(awk "BEGIN{print ${kb}/1048576}")"
+        step_kb=$(( step_kb + kb ))
+        measured="yes"
+    done
+    rm -rf "${tmp}"
 fi
 
-if [ -n "${peak_kb}" ]; then
-    per_op_gb=$(awk "BEGIN {printf \"%.2f\", ${peak_kb}/1048576}")
-    total_gb=$(awk "BEGIN {printf \"%.0f\", ${peak_kb}*${steps_per_node}*${ops_per_step}/1048576}")
-    echo "Measured one operation: ${per_op_gb} GB peak"
-    echo "  ${steps_per_node} steps/node x ${ops_per_step} ops = $(( steps_per_node * ops_per_step )) processes, ${total_gb} GB; node has ${cores_per_node} cores and ${node_memory_gb} GB"
+if [ -n "${measured}" ]; then
+    step_gb=$(awk "BEGIN {printf \"%.2f\", ${step_kb}/1048576}")
+    total_gb=$(awk "BEGIN {printf \"%.0f\", ${step_kb}*${steps_per_node}/1048576}")
+    echo "  ---------------------------------"
+    echo "  one step (${ops_per_step} concurrent ops): ${step_gb} GB"
+    echo "  ${steps_per_node} steps/node -> ${total_gb} GB; node has ${cores_per_node} cores and ${node_memory_gb} GB"
     if [ "${total_gb}" -gt "${node_memory_gb}" ] && [ -z "${FORCE:-}" ]; then
         cat <<MSG
 
@@ -88,15 +105,15 @@ but a node has ${node_memory_gb} GB.  The job would exhaust the node's memory.
 
 Stage smaller inputs, e.g.
 
-    rm -rf ${datadir} && NRECS=2 ./make_data.sh
+    NFILES=32 ./make_data.sh    -- fewer steps, or drop an operation
 
 or set FORCE=1 if you know what you are doing.
 MSG
         exit 1
     fi
 else
-    echo "warning: could not measure operation memory (need /usr/bin/time and ncra);"
-    echo "         check that steps/node x ops/step x per-op memory fits in ${node_memory_gb} GB"
+    echo "warning: could not measure operation memory (need /usr/bin/time and NCO);"
+    echo "         check that steps/node x per-step memory fits in ${node_memory_gb} GB"
 fi
 
 {

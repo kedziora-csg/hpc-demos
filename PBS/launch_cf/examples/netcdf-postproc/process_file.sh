@@ -1,25 +1,24 @@
 #!/bin/bash
 #
-# ONE STEP of the command file: run several independent NCO operations over one
-# NetCDF file.
+# ONE STEP of the command file: three common post-processing operations on one
+# ERA5 file, run at the same time.
 #
-#   * a mean over the record dimension (ncra)
-#   * a compressed rewrite             (ncks -4 -L 1)
-#   * a collapse of the record dimension (ncwa)
+#   ncra                 average over the record (time) dimension
+#   ncks -d lat,lon      cut out a region
+#   ncks -4 -L 1         rewrite compressed
 #
-# All three read the whole input file, so a step spends most of its life waiting
-# on the filesystem rather than computing.  None of them needs to know what
-# variables are inside -- ERA5 files hold a single variable each, and the name
-# differs from file to file -- so this works on any NetCDF file.
+# All three stream the file rather than loading it, so each needs only a few
+# hundred MB no matter how large the input is.  That is what lets this example
+# work on the archive files as they are.
 #
-# The important detail is the "&": a step runs its operations at the same time,
-# so one step is several processes.  That is what makes placement interesting:
+# The point of the example is the "&": a step is THREE processes, not one.  So
+# a node holds cores/3 steps, and launch_cf is told that with --nthreads 3.
+# Placement then matters:
 #
-#   * pinned  (taskset -c N)  a step's operations share one core and take turns,
-#                             even while other cores sit idle
-#   * unpinned                the Linux scheduler can run them on cores that
-#                             neighbouring steps have left idle while those steps
-#                             wait on their own I/O
+#   * pinned  (taskset -c a-b)  a step's three processes stay on its own three
+#                               cores, idle or not
+#   * unpinned                  the Linux scheduler can use cores that other
+#                               steps have left idle while they wait on I/O
 #
 # Usage: process_file.sh <input.nc> [output dir]
 
@@ -28,32 +27,16 @@ set -u
 infile="${1:?usage: process_file.sh <input.nc> [output dir]}"
 outdir="${2:-./out}"
 
-[ -r "${infile}" ] || { echo "ERROR: cannot read ${infile}"; exit 1; }
+# Region to cut out.  ERA5 longitudes run 0-360, latitudes 90 to -90.
+lat_range="${LAT_RANGE:-20.,60.}"        # roughly North America
+lon_range="${LON_RANGE:-230.,300.}"
 
-# The dimension to collapse is whichever one is UNLIMITED -- "time" in the ERA5
-# analysis files, "forecast_initial_time" in the forecast ones.  Ask the file
-# rather than assuming; override with TIMEDIM if you want a different one.
-recdim="${TIMEDIM:-$(ncdump -h "${infile}" | awk '/UNLIMITED/ {print $1; exit}')}"
-if [ -z "${recdim}" ]; then
-    echo "ERROR: ${infile} has no unlimited dimension; set TIMEDIM to the one to collapse"
-    exit 1
-fi
+[ -r "${infile}" ] || { echo "ERROR: cannot read ${infile}"; exit 1; }
 mkdir -p "${outdir}"
 
-# MEASURE=1 records each operation's peak resident memory and elapsed time in
-# ${outdir}/mem.log, one line per process:
-#
-#     <peak KB>|<seconds>|<command>
-#
-# Summarize a finished run with:
-#
-#   awk -F'|' '{g=$1/1048576; if(g>m)m=g; t+=g}
-#              END {printf "largest op %.2f GB, sum %.1f GB over %d ops\n", m, t, NR}' \
-#       out.unpinned/mem.log
-#
-# That sum is an upper bound for one node: it assumes every process peaked at
-# the same moment.  For what a node actually reached, read the job's own
-# accounting instead -- "qstat -xf <jobid> | grep resources_used.mem".
+# MEASURE=1 appends "<peak KB>|<seconds>|<command>" per process to mem.log.
+# Summarize with:
+#   awk -F'|' '{g=$1/1048576; if(g>m)m=g} END {printf "largest op %.2f GB\n", m}' out.*/mem.log
 measure=""
 if [ -n "${MEASURE:-}" ]; then
     if [ -x /usr/bin/time ]; then
@@ -66,16 +49,14 @@ fi
 base=$(basename "${infile}" .nc)
 start=$(date +%s)
 
-# average over the record dimension
 ${measure} ncra -O "${infile}" "${outdir}/${base}.timemean.nc" &
 
-# rewrite with compression: reads everything, writes everything
-${measure} ncks -O -4 -L 1 "${infile}" "${outdir}/${base}.compressed.nc" &
+${measure} ncks -O -d latitude,"${lat_range}" -d longitude,"${lon_range}" \
+                   "${infile}" "${outdir}/${base}.region.nc" &
 
-# collapse the record dimension
-${measure} ncwa -O -a "${recdim}" "${infile}" "${outdir}/${base}.timecollapse.nc" &
+${measure} ncks -O -4 -L 1 "${infile}" "${outdir}/${base}.compressed.nc" &
 
 # wait for this step's operations to finish before the step exits
 wait
 
-echo "step ${base} | ops 3 | recdim ${recdim} | seconds $(( $(date +%s) - start )) | host $(hostname -s) | PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX:-0}"
+echo "step ${base} | ops 3 | seconds $(( $(date +%s) - start )) | host $(hostname -s) | PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX:-0}"
