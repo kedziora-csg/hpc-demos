@@ -21,9 +21,15 @@ PYTHON   ?= python3
 launch_cf ?= launch_cf
 
 # Each example directory holds its own cmdfile and submission script.
-EXAMPLES := derecho-640procs threaded-apps
-CMDFILES := $(addsuffix /cmdfile,$(EXAMPLES)) \
-            threaded-apps/cmdfile.numactl threaded-apps/cmdfile.numactl_bind
+EXAMPLES := derecho-640procs threaded-apps netcdf-postproc
+
+# Command files that can be generated with no further input.  netcdf-postproc
+# is deliberately absent: its command files list the data files make_data.sh
+# produced, so run "make netcdf-data" for that one.
+CMDFILES := derecho-640procs/cmdfile \
+            threaded-apps/cmdfile \
+            threaded-apps/cmdfile.numactl \
+            threaded-apps/cmdfile.numactl_bind
 
 all: hello_omp.exe $(CMDFILES)
 
@@ -49,6 +55,14 @@ threaded-apps/cmdfile.numactl: gen_cmdfile_numactl.sh
 # ...and the same again, additionally binding one thread per physical core.
 threaded-apps/cmdfile.numactl_bind: gen_cmdfile_numactl.sh
 	./gen_cmdfile_numactl.sh $@ bind
+
+# Build the NetCDF example's inputs, then both of its command files.  Slicing
+# the source file takes a few minutes; see netcdf-postproc/make_data.sh for
+# where the data comes from and how to point it elsewhere.
+netcdf-data:
+	cd netcdf-postproc && ./make_data.sh
+	cd netcdf-postproc && ./gen_cmdfile_postproc.sh ./cmdfile
+	cd netcdf-postproc && ./gen_cmdfile_postproc.sh ./cmdfile.pinned pin
 
 submit: all
 	cd derecho-640procs && ./submit_launch_cf.sh
@@ -77,7 +91,10 @@ clobber: clean
 	rm -f $(addsuffix /launch_cf.log,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.numactl.log,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.numactl_bind.log,$(EXAMPLES))
+	rm -f $(addsuffix /launch_cf.pinned.log,$(EXAMPLES))
+	rm -rf netcdf-postproc/out
+	@echo "(netcdf-postproc/data left in place; delete it by hand to re-slice)"
 	rm -f $(addsuffix /launch_cf.*.pbs,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.o*,$(EXAMPLES))
 
-.PHONY: all cmdfiles submit dryrun csv clean clobber
+.PHONY: all cmdfiles netcdf-data submit dryrun csv clean clobber

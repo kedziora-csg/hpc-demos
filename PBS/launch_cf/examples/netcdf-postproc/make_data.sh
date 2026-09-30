@@ -3,25 +3,40 @@
 # Build the input files this example processes, by slicing one large NetCDF
 # file into many small ones -- one per time step.
 #
-# The source defaults to an hourly ERA5 surface analysis file from the NSF NCAR
-# Research Data Archive (dataset ds633.0), which is netCDF-4 and readable on
-# GLADE from any NCAR system.  Point SRC somewhere else if you prefer:
+# The source defaults to an hourly ERA5 file from the NSF NCAR Geoscience Data
+# Exchange (GDEX, dataset d633000), which is netCDF-4 and readable on GLADE from
+# any NCAR system.  Point SRC somewhere else if you prefer:
 #
 #   SRC=/glade/derecho/scratch/$USER/my_output.nc ./make_data.sh
 #
-# VERIFY THE PATH BELOW before relying on it -- RDA reorganizes collections,
-# and the per-year file listings at https://rda.ucar.edu/datasets/ds633.0/
-# show the current GLADE location of every file.
+# Run ./check_data.sh first -- it locates the dataset on GLADE and prints the
+# SRC line to use.
 
 set -u
 
-SRC="${SRC:-/glade/campaign/collections/rda/data/ds633.0/e5.oper.an.sfc/202001/e5.oper.an.sfc.128_167_2t.ll025sc.2020010100_2020013123.nc}"
+# The Geoscience Data Exchange (GDEX, formerly the RDA) keeps ERA5 on GLADE as
+# dataset d633000.  The collection moved and was renamed, so rather than hard
+# coding one path we look in the places it is known to live and take the first
+# NetCDF file we find.  Run ./check_data.sh first: it reports exactly what is
+# there and prints the SRC= line to paste here or set in the environment.
+DSID="${DSID:-d633000}"
+
+if [ -z "${SRC:-}" ]; then
+    for root in /glade/campaign/collections/gdex/data /gdex/data \
+                /glade/campaign/collections/rda/data; do
+        [ -d "${root}/${DSID}" ] || continue
+        SRC=$(find "${root}/${DSID}" -name '*.nc' -print -quit 2>/dev/null)
+        [ -n "${SRC}" ] && break
+    done
+fi
+SRC="${SRC:-}"
+
 OUTDIR="${OUTDIR:-./data}"
 NSLICES="${NSLICES:-256}"
 
 command -v ncks >/dev/null || { echo "ERROR: ncks not found -- try \"module load nco\""; exit 1; }
 
-if [ ! -r "${SRC}" ]; then
+if [ -z "${SRC}" ] || [ ! -r "${SRC}" ]; then
     cat <<MSG
 ERROR: cannot read the source file
 
@@ -31,8 +46,8 @@ Set SRC to a NetCDF file you can read, e.g.
 
     SRC=/glade/campaign/collections/rda/data/ds633.0/... ./make_data.sh
 
-The RDA per-year file listings show the current GLADE path for every file:
-    https://rda.ucar.edu/datasets/ds633.0/
+Run ./check_data.sh to locate the data, or search the dataset id at
+https://gdex.ucar.edu and follow Data Access -> NCAR HPC Data Access.
 MSG
     exit 1
 fi

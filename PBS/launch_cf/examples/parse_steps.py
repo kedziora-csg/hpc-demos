@@ -214,12 +214,13 @@ def summarize(rows, cores_per_node, show_details):
     head = f"  {'index':>5}  {'host':<10}  {'steps':>5}  {'thrds':>5}  {'used':>5}  {'reused':>6}  {'unused':>6}"
     rule = f"  {'-'*5}  {'-'*10}  {'-'*5}  {'-'*5}  {'-'*5}  {'-'*6}  {'-'*6}"
     if threaded:
-        head += f"  {'1-domain steps':>14}"
-        rule += f"  {'-'*14}"
+        head += f"  {'1-dom':>5}  {'maxdom':>6}"
+        rule += f"  {'-'*5}  {'-'*6}"
     print(head)
     print(rule)
 
     reused_by_index = {}
+    spanning = {}
     for index in sorted(by_index, key=int):
         index_rows = by_index[index]
 
@@ -234,20 +235,23 @@ def summarize(rows, cores_per_node, show_details):
         unused = cores_per_node - used
         hosts = ",".join(sorted({row["host"] for row in index_rows}))
 
-        # how many NUMA domains did each step's threads land in?
-        domains_per_step = defaultdict(set)
+        # which NUMA domains did each step's threads land in, and how many
+        # threads in each?
+        domains_per_step = defaultdict(lambda: defaultdict(int))
         for row in index_rows:
             if row["numa_domain"] != "":
-                domains_per_step[row["step"]].add(row["numa_domain"])
+                domains_per_step[row["step"]][row["numa_domain"]] += 1
         steps = len(domains_per_step) or len({r["step"] for r in index_rows})
         confined = sum(1 for d in domains_per_step.values() if len(d) == 1)
+        max_domains = max((len(d) for d in domains_per_step.values()), default=0)
+        spanning[index] = {st: d for st, d in domains_per_step.items() if len(d) > 1}
 
         line = (
             f"  {index:>5}  {hosts:<10}  {steps:>5}  {len(index_rows):>5}  {used:>5}  "
             f"{len(reused):>6}  {unused:>6}"
         )
         if threaded:
-            line += f"  {f'{confined} of {steps}':>14}"
+            line += f"  {confined:>5}  {max_domains:>6}"
         print(line)
 
     print()
@@ -256,8 +260,9 @@ def summarize(rows, cores_per_node, show_details):
     print("  reused = those cores that took more than one thread")
     print("  unused = cores of the node no thread reported")
     if threaded:
-        print("  1-domain steps = steps whose threads all stayed in one NUMA domain;")
-        print("                   this is what \"numactl --cpunodebind\" buys you")
+        print("  1-dom  = steps whose threads all stayed in one NUMA domain;")
+        print("           this is what \"numactl --cpunodebind\" buys you")
+        print("  maxdom = most NUMA domains any single step's threads were spread over")
 
     # A node can serve more than one array index, sequentially.  Say so, since
     # it explains why the same host appears on several lines above.
@@ -273,6 +278,24 @@ def summarize(rows, cores_per_node, show_details):
             print(f"          {host} -> indices {', '.join(indices)}")
         print("        Those indices ran at different times, on a node released and")
         print("        reallocated in between, so cores they share were not contended.")
+
+    if threaded:
+        total_spanning = sum(len(v) for v in spanning.values())
+        print()
+        if total_spanning == 0:
+            print("  Every step kept all of its threads inside a single NUMA domain.")
+        else:
+            print(f"  {total_spanning} step(s) spread threads over more than one NUMA domain:")
+            print()
+            print(f"    {'index':>5}  {'step':>5}  {'doms':>4}  threads per domain")
+            print(f"    {'-'*5}  {'-'*5}  {'-'*4}  {'-'*40}")
+            for index in sorted(spanning, key=int):
+                for step in sorted(spanning[index], key=int):
+                    counts = spanning[index][step]
+                    spread = " ".join(
+                        f"d{d}:{counts[d]}" for d in sorted(counts, key=int)
+                    )
+                    print(f"    {index:>5}  {step:>5}  {len(counts):>4}  {spread}")
 
     if show_details:
         for index in sorted(reused_by_index, key=int):
