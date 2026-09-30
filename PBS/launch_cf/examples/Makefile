@@ -92,7 +92,7 @@ clobber: clean
 	rm -f $(addsuffix /launch_cf.numactl.log,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.numactl_bind.log,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.pinned.log,$(EXAMPLES))
-	rm -rf netcdf-postproc/out
+	rm -rf netcdf-postproc/out.unpinned netcdf-postproc/out.pinned netcdf-postproc/out
 	@echo "(netcdf-postproc/data left in place; delete it by hand to re-slice)"
 	rm -f $(addsuffix /launch_cf.*.pbs,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.o*,$(EXAMPLES))

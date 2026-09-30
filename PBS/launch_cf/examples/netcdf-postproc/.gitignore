@@ -1,6 +1,8 @@
 # Input slices built by make_data.sh and the per-variable files each step
 # writes.  Both are run products; make_data.sh rebuilds the inputs.
 data/
+out.unpinned/
+out.pinned/
 out/
 *.nc
 

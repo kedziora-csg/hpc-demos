@@ -20,15 +20,23 @@
 #------------------------------------------------------------------
 datadir="./data"             # where make_data.sh put the input files
 cores_per_node=128           # steps per node == cores per Derecho node
-outdir="./out"               # where each step writes its per-variable files
+
+# Each run writes to its own directory.  Both runs process the same inputs and
+# name their outputs after them, so a shared directory would mean the two runs
+# overwriting each other's files -- and if they happen to run at the same time,
+# writing the same file at the same time.
+outdir_unpinned="./out.unpinned"
+outdir_pinned="./out.pinned"
 #------------------------------------------------------------------
 
 output="${1:-./cmdfile}"
 
 # with "pin", each step is confined to one core
 pin=""
+outdir="${outdir_unpinned}"
 if [ "${2:-}" = "pin" ]; then
     pin="yes"
+    outdir="${outdir_pinned}"
 fi
 
 files=( ${datadir}/*.nc )
@@ -44,6 +52,8 @@ fi
     else
         echo "# Steps are not pinned; the Linux scheduler places them."
     fi
+    echo "#"
+    echo "# Output goes to ${outdir}/"
     echo "#"
     echo "# Submit with:"
     echo "#   launch_cf -A \$PBS_ACCOUNT -l walltime=00:20:00 ${output}"
@@ -62,6 +72,7 @@ fi
 } > "${output}"
 
 echo "Wrote ${#files[@]} steps to ${output}"
+echo " -> output directory ${outdir}/"
 if [ -n "${pin}" ]; then
     echo " -> each step pinned to one core with taskset"
 else
