@@ -40,17 +40,40 @@ if [ -z "${recdim}" ]; then
 fi
 mkdir -p "${outdir}"
 
+# MEASURE=1 records each operation's peak resident memory and elapsed time in
+# ${outdir}/mem.log, one line per process:
+#
+#     <peak KB>|<seconds>|<command>
+#
+# Summarize a finished run with:
+#
+#   awk -F'|' '{g=$1/1048576; if(g>m)m=g; t+=g}
+#              END {printf "largest op %.2f GB, sum %.1f GB over %d ops\n", m, t, NR}' \
+#       out.unpinned/mem.log
+#
+# That sum is an upper bound for one node: it assumes every process peaked at
+# the same moment.  For what a node actually reached, read the job's own
+# accounting instead -- "qstat -xf <jobid> | grep resources_used.mem".
+measure=""
+if [ -n "${MEASURE:-}" ]; then
+    if [ -x /usr/bin/time ]; then
+        measure="/usr/bin/time -f %M|%e|%C -o ${outdir}/mem.log -a"
+    else
+        echo "warning: MEASURE=1 but /usr/bin/time not found; not measuring" >&2
+    fi
+fi
+
 base=$(basename "${infile}" .nc)
 start=$(date +%s)
 
 # average over the record dimension
-ncra -O "${infile}" "${outdir}/${base}.timemean.nc" &
+${measure} ncra -O "${infile}" "${outdir}/${base}.timemean.nc" &
 
 # rewrite with compression: reads everything, writes everything
-ncks -O -4 -L 1 "${infile}" "${outdir}/${base}.compressed.nc" &
+${measure} ncks -O -4 -L 1 "${infile}" "${outdir}/${base}.compressed.nc" &
 
 # collapse the record dimension
-ncwa -O -a "${recdim}" "${infile}" "${outdir}/${base}.timecollapse.nc" &
+${measure} ncwa -O -a "${recdim}" "${infile}" "${outdir}/${base}.timecollapse.nc" &
 
 # wait for this step's operations to finish before the step exits
 wait

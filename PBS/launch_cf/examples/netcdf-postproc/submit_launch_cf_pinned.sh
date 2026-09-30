@@ -7,4 +7,5 @@
 #   grep "^Done:" launch_cf.o*
 
 launch_cf -A $PBS_ACCOUNT -l walltime=00:20:00 \
+  --nthreads 3 \
   ./cmdfile.pinned |& tee launch_cf.pinned.log
