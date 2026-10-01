@@ -3,7 +3,7 @@
 # ONE STEP of the command file: reduce one ERA5 file to three regional
 # diagnostics, computing all three at the same time.
 #
-#   ncra           regional time MEAN     -> the file's contribution to a climatology
+#   ncra           regional time MEAN     -> the mean over this file's period
 #   ncra -y max    regional time MAXIMUM  -> the companion extremes field
 #   ncks           regional TIME SERIES   -> full time resolution, region only
 #
@@ -24,6 +24,9 @@
 #   * unpinned                  the scheduler can use cores that other steps
 #                               have left idle while they wait on their own I/O
 #
+# The step exits non-zero if any of its operations fails, and only finished
+# outputs are given their final names, so gather.sh never sees a partial file.
+#
 # Usage: process_file.sh <input.nc> [output dir]
 
 set -u
@@ -39,9 +42,20 @@ lon_range="${LON_RANGE:-235.,295.}"
 [ -r "${infile}" ] || { echo "ERROR: cannot read ${infile}"; exit 1; }
 mkdir -p "${outdir}"
 
+# ERA5 forecast products (e5.oper.fc.*) have TWO time dimensions: the record
+# dimension forecast_initial_time and, inside each record, forecast_hour.  ncra
+# reduces only the record dimension, so the mean and maximum are finished over
+# forecast_hour with ncwa.  ncwa loads the whole array, but by then the array is
+# the small regional result, so that costs nothing.  Analysis products
+# (e5.oper.an.*) have a single time dimension and skip this.
+inner_time_dim="${INNER_TIME_DIM:-forecast_hour}"
+if ! ncks --cdl -m "${infile}" 2>/dev/null | grep -Eq "^[[:space:]]+${inner_time_dim} = "; then
+    inner_time_dim=""
+fi
+
 # MEASURE=1 records each operation's peak resident memory and elapsed time.
-# Each process writes its OWN file under <outdir>/mem/ -- 126 steps x 3 ops all
-# appending to one log would race on a parallel filesystem.
+# Each process writes its OWN file under <outdir>/mem/ -- every step's three
+# ops all appending to one log would race on a parallel filesystem.
 #
 # Summarize a finished run with:
 #
@@ -50,27 +64,66 @@ mkdir -p "${outdir}"
 #       END {printf "%d ops, largest %.2f GB, mean %.2f GB\n", NR, m, t/NR}'
 #
 base=$(basename "${infile}" .nc)
-m_mean="" ; m_max="" ; m_series=""
+memdir=""
 if [ -n "${MEASURE:-}" ]; then
     if [ -x /usr/bin/time ]; then
-        mkdir -p "${outdir}/mem"
-        t="/usr/bin/time -f %M|%e|%C -o"
-        m_mean="${t} ${outdir}/mem/${base}.mean.log"
-        m_max="${t} ${outdir}/mem/${base}.max.log"
-        m_series="${t} ${outdir}/mem/${base}.series.log"
+        memdir="${outdir}/mem"
+        mkdir -p "${memdir}"
     else
         echo "warning: MEASURE=1 but /usr/bin/time not found; not measuring" >&2
     fi
 fi
 
 region="-d latitude,${lat_range} -d longitude,${lon_range}"
-start=$(date +%s)
 
-${m_mean} ncra -O        ${region} "${infile}" "${outdir}/${base}.mean.nc"   &
-${m_max} ncra -O -y max ${region} "${infile}" "${outdir}/${base}.max.nc"    &
-${m_series} ncks -O        ${region} "${infile}" "${outdir}/${base}.series.nc" &
+# reduce <name> <ncwa options, or "" for none> <NCO operator and options...>
+#
+# Runs one operation on this step's input into <base>.<name>.nc.  The work is
+# done under a temporary name and renamed only once it has succeeded; any
+# output left by an earlier run is removed first, so a failure leaves nothing
+# for gather.sh to pick up by mistake.
+reduce() {
+    local name="$1" inner="$2"; shift 2
+    local out="${outdir}/${base}.${name}.nc"
+    local tmp="${outdir}/${base}.${name}.tmp"
+    local meas=""
+    [ -n "${memdir}" ] && meas="/usr/bin/time -f %M|%e|%C -o ${memdir}/${base}.${name}.log"
+    rm -f "${out}"
 
-# wait for this step's three reductions before the step exits
-wait
+    if ! ${meas} "$@" ${region} "${infile}" "${tmp}"; then
+        echo "ERROR: ${name}: $* failed on ${infile}" >&2
+        rm -f "${tmp}"
+        return 1
+    fi
+    if [ -n "${inner}" ] && [ -n "${inner_time_dim}" ]; then
+        if ! ncwa -O -a "${inner_time_dim}" ${inner} "${tmp}" "${tmp}.2"; then
+            echo "ERROR: ${name}: ncwa over ${inner_time_dim} failed" >&2
+            rm -f "${tmp}" "${tmp}.2"
+            return 1
+        fi
+        mv -f "${tmp}.2" "${tmp}"
+    fi
+    mv -f "${tmp}" "${out}"
+}
 
-echo "step ${base} | ops 3 | seconds $(( $(date +%s) - start )) | host $(hostname -s) | PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX:-0}"
+start=$(date +%s.%N)
+
+pids=() ; names=()
+reduce mean   "-y avg" ncra -O        & pids+=($!) ; names+=(mean)
+reduce max    "-y max" ncra -O -y max & pids+=($!) ; names+=(max)
+reduce series ""       ncks -O        & pids+=($!) ; names+=(series)
+
+# wait for each of this step's three reductions, noting any that failed
+failed=()
+for i in "${!pids[@]}"; do
+    wait "${pids[$i]}" || failed+=("${names[$i]}")
+done
+
+secs=$(awk -v a="${start}" -v b="$(date +%s.%N)" 'BEGIN {printf "%.2f", b-a}')
+echo "step ${base} | ops 3 | failed ${#failed[@]} | seconds ${secs} | host $(hostname -s) | PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX:-0}"
+
+if [ ${#failed[@]} -gt 0 ]; then
+    echo "ERROR: ${base}: failed: ${failed[*]}" >&2
+    exit 1
+fi
+exit 0

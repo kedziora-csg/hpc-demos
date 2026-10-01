@@ -8,26 +8,72 @@
 # split -- an embarrassingly parallel phase followed by a small gather -- is the
 # usual shape of this kind of analysis.
 #
+# It gathers exactly the outputs of the inputs in ./data, and refuses to run if
+# any are missing: a failed step would otherwise leave a silent gap in the time
+# series.  Anything else in the output directory, such as an earlier run on a
+# different parameter, is left out.
+#
 # Usage: ./gather.sh [output dir of a run]     (default ./out.unpinned)
+#        DATADIR=/other/inputs ./gather.sh ...
 
 set -u
 d="${1:-./out.unpinned}"
+datadir="${DATADIR:-./data}"
 [ -d "${d}" ] || { echo "ERROR: no such directory: ${d}"; exit 1; }
 
+# NCO runs here on the login node; config_env.sh only loads it inside the job
+command -v ncrcat >/dev/null || module load nco 2>/dev/null
 command -v ncrcat >/dev/null || { echo "ERROR: NCO not loaded -- module load nco"; exit 1; }
 
-n=$(ls -1 "${d}"/*.mean.nc 2>/dev/null | wc -l | tr -d ' ')
-[ "${n}" -gt 0 ] || { echo "ERROR: no *.mean.nc in ${d} -- has the job finished?"; exit 1; }
-echo "Gathering ${n} files from ${d}/"
+inputs=( "${datadir}"/*.nc )
+[ -e "${inputs[0]}" ] || { echo "ERROR: no inputs in ${datadir}/ to gather the outputs of"; exit 1; }
+
+# the outputs each input should have produced, in input (time) order
+means=() ; maxes=() ; series=() ; missing=0
+for f in "${inputs[@]}"; do
+    b=$(basename "${f}" .nc)
+    for kind in mean max series; do
+        if [ ! -s "${d}/${b}.${kind}.nc" ]; then
+            [ ${missing} -lt 5 ] && echo "  missing: ${d}/${b}.${kind}.nc"
+            missing=$(( missing + 1 ))
+        fi
+    done
+    means+=( "${d}/${b}.mean.nc" )
+    maxes+=( "${d}/${b}.max.nc" )
+    series+=( "${d}/${b}.series.nc" )
+done
+if [ ${missing} -gt 0 ]; then
+    cat <<MSG
+ERROR: ${missing} output(s) missing for the ${#inputs[@]} inputs in ${datadir}/.
+Look for steps that failed:  grep -l ERROR stdout-*/step-*.out
+MSG
+    exit 1
+fi
+
+others=$(ls -1 "${d}"/*.nc 2>/dev/null | grep -v '/regional_' | wc -l | tr -d ' ')
+others=$(( others - 3 * ${#inputs[@]} ))
+[ ${others} -gt 0 ] && echo "note: ignoring ${others} file(s) in ${d}/ not made from the inputs in ${datadir}/"
+
+echo "Gathering ${#inputs[@]} files from ${d}/"
 
 # a continuous regional time series across every input period
-ncrcat -O "${d}"/*.series.nc  "${d}/regional_timeseries.nc"
+ncrcat -O "${series[@]}" "${d}/regional_timeseries.nc" || exit 1
 
-# the climatology: mean of the per-file means
-ncra   -O "${d}"/*.mean.nc    "${d}/regional_climatology.nc"
+# the mean of each input period, one record per input file
+ncrcat -O "${means[@]}" "${d}/regional_period_means.nc" || exit 1
 
-# and the extreme of the per-file extremes
-ncra   -O -y max "${d}"/*.max.nc "${d}/regional_maximum.nc"
+# The climatology: the mean over every record of the time series.  Averaging the
+# per-file means instead would weight every file alike, but half-month files
+# hold anywhere from 26 to 32 forecasts.  Forecast products then need the same
+# average over forecast_hour that process_file.sh gave the per-file means.
+ncra -O "${d}/regional_timeseries.nc" "${d}/regional_climatology.nc" || exit 1
+inner_time_dim="${INNER_TIME_DIM:-forecast_hour}"
+if ncks --cdl -m "${d}/regional_climatology.nc" 2>/dev/null | grep -Eq "^[[:space:]]+${inner_time_dim} = "; then
+    ncwa -O -a "${inner_time_dim}" "${d}/regional_climatology.nc" "${d}/regional_climatology.nc" || exit 1
+fi
+
+# and the extreme of the per-file extremes, which needs no weighting
+ncra -O -y max "${maxes[@]}" "${d}/regional_maximum.nc" || exit 1
 
 echo
 ls -lh "${d}"/regional_*.nc | awk '{print "  "$9"  "$5}'

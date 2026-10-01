@@ -12,21 +12,32 @@
 # gather.sh can join the results into one time series and one climatology.
 # Mixing parameters would give you a meaningless average of unlike quantities.
 #
-# Run ./check_data.sh first; it locates the dataset and reports what is there.
+# Run ./check_data.sh first; it locates the dataset, reports what is there, and
+# suggests a PRODUCT and PARAM for a given file size.
 #
-#   ./make_data.sh                        # 128 files from the default product
-#   NFILES=256 ./make_data.sh             # more steps
+#   ./make_data.sh                        # 126 files from the default product
+#   NFILES=252 ./make_data.sh             # more steps
 #   PRODUCT=e5.oper.an.sfc ./make_data.sh # a different ERA5 product
 #   COPY=1 ./make_data.sh                 # real copies instead of symlinks
 #   PARAM=235_033_msshf ./make_data.sh    # a particular ERA5 parameter
 #   SRCDIR=/some/other/dir ./make_data.sh # somewhere else entirely
+#   CLEAN=1 ./make_data.sh                # replace what an earlier run staged
+#
+# The default of 126 files fills exactly three nodes at 42 steps per node (see
+# gen_cmdfile_postproc.sh); pick a multiple of 42 so no node runs half empty.
+#
+# Re-running with the same settings is harmless: files already staged are kept.
+# But ${OUTDIR} must hold ONLY this selection -- gen_cmdfile_postproc.sh and
+# gather.sh use every file in it -- so if it holds anything else (a different
+# parameter or product, or more files than NFILES) this refuses to run until
+# you set CLEAN=1, which removes those files first.
 
 set -u
 
 DSID="${DSID:-d633000}"
 PRODUCT="${PRODUCT:-e5.oper.fc.sfc.meanflux}"
 OUTDIR="${OUTDIR:-./data}"
-NFILES="${NFILES:-128}"
+NFILES="${NFILES:-126}"
 
 if [ -z "${SRCDIR:-}" ]; then
     for root in /glade/campaign/collections/gdex/data /gdex/data \
@@ -52,8 +63,10 @@ fi
 
 # One parameter only.  ERA5 filenames carry it as <table>_<number>_<short name>,
 # e.g. e5.oper.fc.sfc.meanflux.235_033_msshf.ll025sc.<dates>.nc
+# Without PARAM, take the one in the first file in sorted order, so the choice
+# is the same every time.  ./check_data.sh suggests a PARAM by file size.
 if [ -z "${PARAM:-}" ]; then
-    first=$(find "${SRCDIR}" -name '*.nc' -print -quit 2>/dev/null)
+    first=$(find "${SRCDIR}" -name '*.nc' 2>/dev/null | sort | head -1)
     PARAM=$(basename "${first}" | grep -o '[0-9]\{3\}_[0-9]\{3\}_[A-Za-z0-9]*' | head -1)
 fi
 if [ -z "${PARAM}" ]; then
@@ -61,23 +74,44 @@ if [ -z "${PARAM}" ]; then
     echo "         staging whatever sorts first -- gather.sh may mix quantities."
 fi
 
+# the files to stage, in time order (the paths are <product>/<YYYYMM>/<file>)
+wanted=$(find "${SRCDIR}" -name "*${PARAM:+${PARAM}}*.nc" | sort | head -n "${NFILES}")
+[ -n "${wanted}" ] || { echo "ERROR: no .nc files found under ${SRCDIR}"; exit 1; }
+nwanted=$(echo "${wanted}" | wc -l | tr -d ' ')
+
 mkdir -p "${OUTDIR}"
-echo "Staging up to ${NFILES} files from"
+
+# anything already in ${OUTDIR} that is not part of this selection
+stale=$(comm -23 <(ls -1 "${OUTDIR}" | grep '\.nc$' | sort) \
+                 <(echo "${wanted}" | xargs -n1 basename | sort))
+if [ -n "${stale}" ]; then
+    nstale=$(echo "${stale}" | wc -l | tr -d ' ')
+    if [ -z "${CLEAN:-}" ]; then
+        cat <<MSG
+ERROR: ${OUTDIR} already holds ${nstale} file(s) that are not part of this selection,
+e.g. $(echo "${stale}" | head -1)
+
+The command file and gather.sh would use them too, mixing them into the results.
+Re-run with CLEAN=1 to remove them, or set OUTDIR to stage somewhere else.
+MSG
+        exit 1
+    fi
+    echo "${stale}" | while read -r f; do rm -f "${OUTDIR}/${f}"; done
+    echo "Removed ${nstale} file(s) from an earlier selection"
+fi
+
+echo "Staging ${nwanted} files from"
 echo "  ${SRCDIR}"
 [ -n "${PARAM}" ] && echo "  parameter ${PARAM}, successive periods"
 
-n=0
-while read -r f; do
-    [ ${n} -ge ${NFILES} ] && break
+echo "${wanted}" | while read -r f; do
     dest="${OUTDIR}/$(basename "${f}")"
     if [ ! -e "${dest}" ] && [ ! -L "${dest}" ]; then
         if [ -n "${COPY:-}" ]; then cp "${f}" "${dest}"; else ln -s "${f}" "${dest}"; fi
     fi
-    n=$(( n + 1 ))
-done < <(find "${SRCDIR}" -name "*${PARAM:+${PARAM}}*.nc" | sort)
+done
 
-staged=$(ls -1 "${OUTDIR}" | wc -l | tr -d ' ')
-[ "${staged}" -gt 0 ] || { echo "ERROR: no .nc files found under ${SRCDIR}"; exit 1; }
+staged=$(ls -1 "${OUTDIR}" | grep -c '\.nc$')
 echo "Staged ${staged} files ($([ -n "${COPY:-}" ] && echo copies || echo symlinks))"
 [ "${staged}" -lt "${NFILES}" ] && echo "  (only ${staged} available; asked for ${NFILES})"
 exit 0

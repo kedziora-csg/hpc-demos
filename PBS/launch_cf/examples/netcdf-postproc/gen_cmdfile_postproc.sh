@@ -7,12 +7,17 @@
 #
 # Passing "pin" as the second argument prefixes every step with
 #
-#     taskset -c <core>
+#     taskset -c <lo>-<hi>
 #
-# which locks that step -- and therefore all of its concurrent ncks processes --
-# onto a single core.  Generate both files, submit both, and compare how long
-# the array took.  launch_cf hands out steps to nodes in blocks of "steps per
-# node", so the core number simply cycles 0,1,...,127,0,1,... down the file.
+# which locks that step -- and therefore all of its concurrent NCO processes --
+# onto its own block of ops_per_step (3) cores.  launch_cf hands out steps to
+# nodes in blocks of "steps per node", so the blocks simply cycle 0-2, 3-5, ...,
+# 123-125, 0-2, ... down the file.
+#
+# Generate both files, submit both, and compare the runs with ./compare_runs.sh,
+# which summarizes each run's step times.  Don't compare how long the whole
+# array took: its array jobs run one after another as nodes come free, so that
+# measures the queue as much as the placement.
 #
 # Usage:  ./gen_cmdfile_postproc.sh [output file] [pin]
 #           default output: ./cmdfile
@@ -57,6 +62,10 @@ if [ ${#files[@]} -eq 0 ] || [ ! -r "${files[0]}" ]; then
     exit 1
 fi
 
+# The memory check below runs NCO here, on the login node.  config_env.sh only
+# loads it inside the job, so load it now if it isn't already.
+command -v ncra >/dev/null || module load nco 2>/dev/null
+
 #------------------------------------------------------------------
 # Memory check.
 #
@@ -73,23 +82,42 @@ fi
 # whole array and needs roughly 10x its uncompressed size.  Measuring only the
 # cheapest would clear a job that then exhausts the node.
 #
-# Refuse to write a command file that cannot fit.  FORCE=1 overrides.
+# The probe also catches an operation that fails outright -- a region that
+# misses the grid, say -- which would otherwise fail in every step of the job.
+#
+# Refuse to write a command file that cannot fit or cannot run.  FORCE=1
+# overrides.
 step_kb=0
 measured=""
-if [ -x /usr/bin/time ] && command -v ncra >/dev/null; then
+if [ ! -x /usr/bin/time ]; then
+    why="/usr/bin/time is not installed here"
+elif ! command -v ncra >/dev/null; then
+    why="NCO is not loaded -- module load nco"
+else
     probe="${files[0]}"
+    echo "Measuring each operation on ${probe}"
     tmp=$(mktemp -d)
-    region="-d latitude,25.,50. -d longitude,235.,295."
+    region="-d latitude,${LAT_RANGE:-25.,50.} -d longitude,${LON_RANGE:-235.,295.}"
     for op in "ncra -O ${region}" \
               "ncra -O -y max ${region}" \
               "ncks -O ${region}"; do
-        kb=$(/usr/bin/time -f "%M" ${op} "${probe}" "${tmp}/probe.nc" 2>&1 >/dev/null | tail -1)
+        if ! /usr/bin/time -f "%M" -o "${tmp}/kb" ${op} "${probe}" "${tmp}/probe.nc" \
+                 >"${tmp}/err" 2>&1; then
+            echo
+            echo "ERROR: this operation fails on ${probe}:"
+            echo "    ${op}"
+            sed 's/^/    /' "${tmp}/err"
+            [ -n "${FORCE:-}" ] || { rm -rf "${tmp}"; exit 1; }
+            continue
+        fi
+        kb=$(tail -1 "${tmp}/kb")
         case "${kb}" in ''|*[!0-9]*) continue ;; esac
         printf "  %-42s %6.2f GB\n" "${op}" "$(awk "BEGIN{print ${kb}/1048576}")"
         step_kb=$(( step_kb + kb ))
         measured="yes"
     done
     rm -rf "${tmp}"
+    why="no operation could be measured"
 fi
 
 if [ -n "${measured}" ]; then
@@ -104,23 +132,40 @@ if [ -n "${measured}" ]; then
 REFUSING to write ${output}: a full node of these steps needs about ${total_gb} GB
 but a node has ${node_memory_gb} GB.  The job would exhaust the node's memory.
 
-Stage smaller inputs, e.g.
+Fewer or smaller input files will not help: every step streams its file, and
+launch_cf still puts ${steps_per_node} steps on each node.  Instead either drop
+an operation from process_file.sh, or put fewer steps on a node by raising
+ops_per_step here and passing the same number to launch_cf --nthreads (which
+leaves some of each step's cores idle).
 
-    NFILES=32 ./make_data.sh    -- fewer steps, or drop an operation
-
-or set FORCE=1 if you know what you are doing.
+Or set FORCE=1 if you know what you are doing.
 MSG
         exit 1
     fi
 else
-    echo "warning: could not measure operation memory (need /usr/bin/time and NCO);"
-    echo "         check that steps/node x per-step memory fits in ${node_memory_gb} GB"
+    echo "warning: could not measure operation memory: ${why}."
+    echo "         Check that steps/node x per-step memory fits in ${node_memory_gb} GB."
+fi
+
+# A partly filled last node costs a whole array job for a few steps.
+left=$(( ${#files[@]} % steps_per_node ))
+if [ ${left} -ne 0 ]; then
+    down=$(( ${#files[@]} - left )) ; up=$(( down + steps_per_node ))
+    alt="" ; [ ${down} -gt 0 ] && alt=" (or NFILES=${down})"
+    echo "note: ${#files[@]} steps leave the last node running only ${left} of ${steps_per_node};"
+    echo "      NFILES=${up}${alt} ./make_data.sh would fill every node."
+fi
+
+# Outputs left from an earlier run make the comparison and memory logs murky.
+if [ -d "${outdir}" ] && [ -n "$(ls -A "${outdir}" 2>/dev/null)" ]; then
+    echo "note: ${outdir}/ already holds output from an earlier run;"
+    echo "      rm -rf ${outdir} before submitting for a clean comparison."
 fi
 
 {
     echo "# ${#files[@]} steps, one per NetCDF file in ${datadir}/"
     if [ -n "${pin}" ]; then
-        echo "# Each step is pinned to a single core with taskset."
+        echo "# Each step is pinned to its own ${ops_per_step} cores with taskset."
     else
         echo "# Steps are not pinned; the Linux scheduler places them."
     fi
@@ -156,7 +201,7 @@ echo "Wrote ${#files[@]} steps to ${output}"
 echo " -> output directory ${outdir}/"
 echo " -> submit with --nthreads ${ops_per_step} (${steps_per_node} steps/node, $(( steps_per_node * ops_per_step )) processes on ${cores_per_node} cores)"
 if [ -n "${pin}" ]; then
-    echo " -> each step pinned to one core with taskset"
+    echo " -> each step pinned to its own ${ops_per_step} cores with taskset"
 else
     echo " -> steps unpinned, placed by the Linux scheduler"
 fi

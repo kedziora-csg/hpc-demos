@@ -4,13 +4,19 @@
 #
 # The only thing the example really needs from the data is FILE SIZE: every
 # operation in process_file.sh streams, so memory is bounded whatever you pick,
-# but file size sets how long a step runs.  ~73 MB files give steps of a few
-# seconds, which is too short to measure placement against; bigger files give a
-# cleaner signal.
+# but file size sets how long a step runs.  ~475 MB files give steps of about
+# 10 seconds on a full node, which is still short to measure placement against;
+# bigger files give a cleaner signal.
+#
+# Sizes differ between the parameters of one product as much as between
+# products (73 MB and 400+ MB files sit side by side in e5.oper.fc.sfc.meanflux),
+# and make_data.sh stages a single parameter.  So this measures each PARAMETER,
+# using every file in the product's first month, and recommends a product AND a
+# parameter.
 #
 # Usage:
 #   ./check_data.sh                 survey products and their file sizes
-#   ./check_data.sh 500             also recommend the product nearest 500 MB
+#   ./check_data.sh 500             also recommend a parameter of at least 500 MB
 #   ./check_data.sh 500 d633000     a different dataset
 
 set -u
@@ -32,72 +38,96 @@ ds="${root}/${dsid}"
 
 echo
 echo "== 2. products and their file sizes ============================="
-printf "   %-34s %8s %10s %12s\n" "product" "files" "source" "avg file"
-printf "   %-34s %8s %10s %12s\n" "----------------------------------" "--------" "----------" "------------"
 
+# The sizes are measured on disk because the gdexls catalogue is no help here:
+# it describes the GRIB1 collection withdrawn from GLADE in 2025, and reports
+# 0 files for the netCDF files that replaced it.
+#
+# One row per product and parameter:  <product> <param> <files> <avg MB>
 table=$(mktemp)
-GDEXLS=/glade/u/apps/contrib/gdexls
-
-# NOTE: gdexls reports 0B / 0 files for most of this dataset's products.  Its
-# metadata describes the GRIB1 collection, whose files were withdrawn from GLADE
-# in 2025, while the netCDF files that replaced them sit in the same directories
-# un-catalogued.  (The README in the collection root warns that metadata may be
-# incomplete.)  So measure the files on disk instead, and use gdexls only to
-# fill in a total count where it has one.
 for d in "${ds}"/*/; do
     [ -d "${d}" ] || continue
     p=$(basename "${d}")
-    # sample a few real files; products with no .nc (e.g. the Zarr stores) drop out
-    avg=$(find "${d}" -name '*.nc' -type f 2>/dev/null | head -5 | xargs -r ls -l 2>/dev/null \
-          | awk '{s+=$5; n++} END {if(n) printf "%.1f", s/n/1048576}')
-    [ -n "${avg}" ] || continue
-    cnt="?"
-    if [ -x "${GDEXLS}" ]; then
-        c=$("${GDEXLS}" "${ds}/" 2>/dev/null | awk -v want="${p}" '
-            /^G/ { id=$1; sub(/^G[^\/]*\//,"",id); if (id==want && $3+0 > 0) print $3 }' | head -1)
-        [ -n "${c}" ] && cnt="${c}"
-    fi
-    echo "${p} ${cnt} sampled ${avg}" >> "${table}"
+    # the first month directory; a product without them is measured as it is
+    month=$(find "${d}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | head -1)
+    [ -n "${month}" ] || month="${d}"
+    # products with no .nc (e.g. the Zarr stores) drop out
+    find "${month}" -maxdepth 1 -name '*.nc' -type f -exec ls -l {} + 2>/dev/null \
+        | awk -v p="${p}" '
+            {
+                f = $NF; sub(/.*\//, "", f)
+                param = "-"
+                if (match(f, /[0-9][0-9][0-9]_[0-9][0-9][0-9]_[A-Za-z0-9]+/))
+                    param = substr(f, RSTART, RLENGTH)
+                s[param] += $5; n[param]++
+            }
+            END { for (k in n) printf "%s %s %d %.1f\n", p, k, n[k], s[k]/n[k]/1048576 }' \
+        >> "${table}"
 done
 
-[ -s "${table}" ] || { echo "   (no products found under ${ds})"; exit 1; }
-sort -k4 -n "${table}" | while read -r p cnt vol avg; do
-    printf "   %-34s %8s %10s %9s MB\n" "${p}" "${cnt}" "${vol}" "${avg}"
-done
+[ -s "${table}" ] || { echo "   (no products found under ${ds})"; rm -f "${table}"; exit 1; }
+
+printf "   %-34s %7s %12s %12s\n" "product" "params" "smallest" "largest"
+printf "   %-34s %7s %12s %12s\n" "----------------------------------" "-------" "------------" "------------"
+awk '
+    { if (!($1 in n)) { order[++np] = $1; lo[$1] = $4; hi[$1] = $4 }
+      n[$1]++
+      if ($4 + 0 < lo[$1] + 0) lo[$1] = $4
+      if ($4 + 0 > hi[$1] + 0) hi[$1] = $4 }
+    END { for (i = 1; i <= np; i++) { p = order[i]; print p, n[p], lo[p], hi[p] } }' "${table}" \
+    | sort -k4 -n | while read -r p np lo hi; do
+        printf "   %-34s %7s %9s MB %9s MB\n" "${p}" "${np}" "${lo}" "${hi}"
+    done
+echo "   (average file size of each parameter, measured over the first month)"
 
 echo
 echo "== 3. recommendation ============================================"
+prod="" ; param=""
 if [ -z "${target_mb}" ]; then
     echo "   Re-run with a target file size in MB to get a suggestion, e.g."
     echo "     ./check_data.sh 500"
 else
-    # smallest product whose files are at least the target; the point of asking
-    # for a size is to make steps run longer, so round up rather than nearest
+    # smallest parameter whose files are at least the target; the point of
+    # asking for a size is to make steps run longer, so round up, not nearest
     best=$(awk -v t="${target_mb}" '
-        $4+0 >= t+0 { if (p=="" || $4+0 < a+0) { p=$1; a=$4 } }
-        { if (mx=="" || $4+0 > mx+0) { mp=$1; mx=$4 } }
-        END { if (p!="") print p, a, "atleast"; else print mp, mx, "below" }' "${table}")
+        $4+0 >= t+0 { if (p == "" || $4+0 < a+0) { p = $1; q = $2; a = $4 } }
+        { if (mx == "" || $4+0 > mx+0) { mp = $1; mq = $2; mx = $4 } }
+        END { if (p != "") print p, q, a, "atleast"; else print mp, mq, mx, "below" }' "${table}")
     set -- ${best}
-    prod="${1}"; size="${2}"
-    if [ "${3}" = "atleast" ]; then
-        echo "   at least ${target_mb} MB: ${prod} (~${size} MB per file)"
+    prod="${1}"; param="${2}"; size="${3}"
+    if [ "${4}" = "atleast" ]; then
+        echo "   at least ${target_mb} MB: ${prod}, parameter ${param} (~${size} MB per file)"
     else
-        echo "   nothing reaches ${target_mb} MB; largest is ${prod} (~${size} MB per file)"
+        echo "   nothing reaches ${target_mb} MB; largest is ${prod}, parameter ${param} (~${size} MB per file)"
     fi
     echo
-    echo "   PRODUCT=${prod} ./make_data.sh"
+    if [ "${param}" = "-" ]; then
+        param=""
+        echo "   PRODUCT=${prod} ./make_data.sh"
+    else
+        echo "   PRODUCT=${prod} PARAM=${param} ./make_data.sh"
+    fi
+    echo
+    echo "   all parameters of ${prod}:"
+    awk -v p="${prod}" '$1 == p { printf "     %-20s %9s MB\n", $2, $4 }' "${table}" | sort -k2 -n
 fi
 rm -f "${table}"
 
 echo
 echo "== 4. sanity check on one file =================================="
-sample=$(find "${ds}" -name '*.nc' -print -quit 2>/dev/null)
+# a file of the recommended parameter if there is one, else any file at all
+if [ -n "${prod}" ]; then
+    sample=$(find "${ds}/${prod}" -name "*${param}*.nc" -print -quit 2>/dev/null)
+else
+    sample=$(find "${ds}" -name '*.nc' -print -quit 2>/dev/null)
+fi
 if [ -z "${sample}" ]; then
     echo "   no .nc files found -- this dataset may live on object storage"
     exit 1
 fi
 echo "   ${sample}"
 ls -lh "${sample}" | awk '{print "   readable, "$5}'
+command -v ncdump >/dev/null || module load nco 2>/dev/null
 if command -v ncdump >/dev/null; then
     ncdump -h "${sample}" | sed -n '/^dimensions:/,/^variables:/p' | grep "=" | sed 's/^/   /'
 else
