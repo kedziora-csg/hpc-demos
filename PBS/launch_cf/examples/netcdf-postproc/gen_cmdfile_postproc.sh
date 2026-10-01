@@ -19,8 +19,13 @@
 # array took: its array jobs run one after another as nodes come free, so that
 # measures the queue as much as the placement.
 #
-# Usage:  ./gen_cmdfile_postproc.sh [output file] [pin]
-#           default output: ./cmdfile
+# Usage:  ./gen_cmdfile_postproc.sh            unpinned, writes ./cmdfile
+#         ./gen_cmdfile_postproc.sh pin        pinned,   writes ./cmdfile.pinned
+#         ./gen_cmdfile_postproc.sh pin <file> pinned,   writes <file>
+#
+#           These defaults are the files submit_launch_cf.sh and
+#           submit_launch_cf_pinned.sh submit.  "pin" may come before or after
+#           the file name.
 #
 #         LAT_RANGE=-90.,90. LON_RANGE=0.,359.75 ./gen_cmdfile_postproc.sh
 #           a different region (here the whole globe); see below
@@ -60,14 +65,28 @@ lat_range="${LAT_RANGE:-25.,50.}"
 lon_range="${LON_RANGE:-235.,295.}"
 #------------------------------------------------------------------
 
-output="${1:-./cmdfile}"
-
-# with "pin", each step is confined to one core
+# "pin" is a keyword wherever it appears; any other argument is the output file
 pin=""
+output=""
+for arg in "$@"; do
+    if [ "${arg}" = "pin" ]; then
+        pin="yes"
+    elif [ -z "${output}" ]; then
+        output="${arg}"
+    else
+        echo "ERROR: unexpected argument '${arg}'"
+        echo "usage: ./gen_cmdfile_postproc.sh [pin] [output file]"
+        exit 1
+    fi
+done
+
+# with "pin", each step is confined to its own block of cores
 outdir="${outdir_unpinned}"
-if [ "${2:-}" = "pin" ]; then
-    pin="yes"
+if [ -n "${pin}" ]; then
     outdir="${outdir_pinned}"
+    output="${output:-./cmdfile.pinned}"
+else
+    output="${output:-./cmdfile}"
 fi
 
 files=( ${datadir}/*.nc )
