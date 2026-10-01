@@ -32,33 +32,33 @@ ds="${root}/${dsid}"
 
 echo
 echo "== 2. products and their file sizes ============================="
-printf "   %-34s %8s %10s %12s\n" "product" "files" "volume" "avg file"
+printf "   %-34s %8s %10s %12s\n" "product" "files" "source" "avg file"
 printf "   %-34s %8s %10s %12s\n" "----------------------------------" "--------" "----------" "------------"
 
 table=$(mktemp)
 GDEXLS=/glade/u/apps/contrib/gdexls
-if [ -x "${GDEXLS}" ]; then
-    # gdexls prints: <type><id>  <volume>  <file count>  <description>
-    # volume carries a K/M/G/T suffix; turn it into an average file size.
-    "${GDEXLS}" "${ds}/" 2>/dev/null | awk '
-        /^G/ {
-            id=$1; sub(/^G/,"",id); vol=$2; cnt=$3+0
-            u=substr(vol,length(vol),1); v=vol+0
-            m = (u=="T") ? v*1024*1024 : (u=="G") ? v*1024 : (u=="M") ? v : (u=="K") ? v/1024 : v/1048576
-            if (cnt>0) printf "%s %d %s %.1f\n", id, cnt, vol, m/cnt
-        }' > "${table}"
-fi
 
-if [ ! -s "${table}" ]; then
-    # no gdexls, or nothing parsed: sample a few files from each product instead
-    for d in "${ds}"/*/; do
-        [ -d "${d}" ] || continue
-        p=$(basename "${d}")
-        avg=$(find "${d}" -name '*.nc' -type f 2>/dev/null | head -3 | xargs -r ls -l 2>/dev/null \
-              | awk '{s+=$5; n++} END {if(n) printf "%.1f", s/n/1048576}')
-        [ -n "${avg}" ] && echo "${p} ? sampled ${avg}" >> "${table}"
-    done
-fi
+# NOTE: gdexls reports 0B / 0 files for most of this dataset's products.  Its
+# metadata describes the GRIB1 collection, whose files were withdrawn from GLADE
+# in 2025, while the netCDF files that replaced them sit in the same directories
+# un-catalogued.  (The README in the collection root warns that metadata may be
+# incomplete.)  So measure the files on disk instead, and use gdexls only to
+# fill in a total count where it has one.
+for d in "${ds}"/*/; do
+    [ -d "${d}" ] || continue
+    p=$(basename "${d}")
+    # sample a few real files; products with no .nc (e.g. the Zarr stores) drop out
+    avg=$(find "${d}" -name '*.nc' -type f 2>/dev/null | head -5 | xargs -r ls -l 2>/dev/null \
+          | awk '{s+=$5; n++} END {if(n) printf "%.1f", s/n/1048576}')
+    [ -n "${avg}" ] || continue
+    cnt="?"
+    if [ -x "${GDEXLS}" ]; then
+        c=$("${GDEXLS}" "${ds}/" 2>/dev/null | awk -v want="${p}" '
+            /^G/ { id=$1; sub(/^G[^\/]*\//,"",id); if (id==want && $3+0 > 0) print $3 }' | head -1)
+        [ -n "${c}" ] && cnt="${c}"
+    fi
+    echo "${p} ${cnt} sampled ${avg}" >> "${table}"
+done
 
 [ -s "${table}" ] || { echo "   (no products found under ${ds})"; exit 1; }
 sort -k4 -n "${table}" | while read -r p cnt vol avg; do
