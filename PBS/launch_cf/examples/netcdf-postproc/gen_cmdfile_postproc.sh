@@ -60,20 +60,20 @@ fi
 #------------------------------------------------------------------
 # Memory check.
 #
-# Every step runs ${ops_per_step} operations at once, and every one of those
-# reads a whole variable into memory -- uncompressed, which for NetCDF-4 input
-# is far larger than the file on disk.  With a full node of steps that is
+# A step runs all ${ops_per_step} operations at once, and a node runs
+# ${steps_per_node} steps at once, so the node needs
 #
-#     steps/node x ops/step x (memory for one operation)
+#     steps/node x (sum of the memory for each operation)
 #
-# and if it exceeds the node, the job takes the node down rather than failing
-# politely.  So measure one operation instead of guessing, and refuse to write a
-# command file that cannot fit.  FORCE=1 overrides.
-# Measure every operation and add them up: a step runs all three at once, and a
-# node runs ${steps_per_node} steps at once.  All three stream here, so each
-# costs a few hundred MB regardless of input size -- but measure rather than
-# assume, because not every NCO operator streams (ncwa loads the whole array
-# and needs roughly 10x its size).
+# Exceed that and the job does not fail politely -- it takes the node down.
+#
+# Measure every operation rather than assuming they are alike, because NCO
+# operators differ enormously.  The three used here all stream the file, so each
+# costs a few hundred MB whatever the input size; ncwa, by contrast, loads the
+# whole array and needs roughly 10x its uncompressed size.  Measuring only the
+# cheapest would clear a job that then exhausts the node.
+#
+# Refuse to write a command file that cannot fit.  FORCE=1 overrides.
 step_kb=0
 measured=""
 if [ -x /usr/bin/time ] && command -v ncra >/dev/null; then
