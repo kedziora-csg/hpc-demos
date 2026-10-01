@@ -6,3 +6,8 @@
 # which is exactly what you want for a module load.
 
 module load nco
+
+# Uncomment to record every operation's peak memory under <outdir>/mem/.
+# This file is sourced ON THE COMPUTE NODE, which is why setting MEASURE in your
+# login shell before submitting would have no effect.
+#export MEASURE=1

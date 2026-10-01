@@ -39,23 +39,36 @@ lon_range="${LON_RANGE:-235.,295.}"
 [ -r "${infile}" ] || { echo "ERROR: cannot read ${infile}"; exit 1; }
 mkdir -p "${outdir}"
 
-# MEASURE=1 appends "<peak KB>|<seconds>|<command>" per process to mem.log
-measure=""
+# MEASURE=1 records each operation's peak resident memory and elapsed time.
+# Each process writes its OWN file under <outdir>/mem/ -- 126 steps x 3 ops all
+# appending to one log would race on a parallel filesystem.
+#
+# Summarize a finished run with:
+#
+#   cat out.unpinned/mem/*.log | awk -F'|' '
+#       {g=$1/1048576; t+=g; if(g>m)m=g}
+#       END {printf "%d ops, largest %.2f GB, mean %.2f GB\n", NR, m, t/NR}'
+#
+base=$(basename "${infile}" .nc)
+m_mean="" ; m_max="" ; m_series=""
 if [ -n "${MEASURE:-}" ]; then
     if [ -x /usr/bin/time ]; then
-        measure="/usr/bin/time -f %M|%e|%C -o ${outdir}/mem.log -a"
+        mkdir -p "${outdir}/mem"
+        t="/usr/bin/time -f %M|%e|%C -o"
+        m_mean="${t} ${outdir}/mem/${base}.mean.log"
+        m_max="${t} ${outdir}/mem/${base}.max.log"
+        m_series="${t} ${outdir}/mem/${base}.series.log"
     else
         echo "warning: MEASURE=1 but /usr/bin/time not found; not measuring" >&2
     fi
 fi
 
 region="-d latitude,${lat_range} -d longitude,${lon_range}"
-base=$(basename "${infile}" .nc)
 start=$(date +%s)
 
-${measure} ncra -O        ${region} "${infile}" "${outdir}/${base}.mean.nc"   &
-${measure} ncra -O -y max ${region} "${infile}" "${outdir}/${base}.max.nc"    &
-${measure} ncks -O        ${region} "${infile}" "${outdir}/${base}.series.nc" &
+${m_mean} ncra -O        ${region} "${infile}" "${outdir}/${base}.mean.nc"   &
+${m_max} ncra -O -y max ${region} "${infile}" "${outdir}/${base}.max.nc"    &
+${m_series} ncks -O        ${region} "${infile}" "${outdir}/${base}.series.nc" &
 
 # wait for this step's three reductions before the step exits
 wait
