@@ -79,9 +79,10 @@ measured=""
 if [ -x /usr/bin/time ] && command -v ncra >/dev/null; then
     probe="${files[0]}"
     tmp=$(mktemp -d)
-    for op in "ncra -O" \
-              "ncks -O -d latitude,20.,60. -d longitude,230.,300." \
-              "ncks -O -4 -L 1"; do
+    region="-d latitude,25.,50. -d longitude,235.,295."
+    for op in "ncra -O ${region}" \
+              "ncra -O -y max ${region}" \
+              "ncks -O ${region}"; do
         kb=$(/usr/bin/time -f "%M" ${op} "${probe}" "${tmp}/probe.nc" 2>&1 >/dev/null | tail -1)
         case "${kb}" in ''|*[!0-9]*) continue ;; esac
         printf "  %-42s %6.2f GB\n" "${op}" "$(awk "BEGIN{print ${kb}/1048576}")"

@@ -1,24 +1,28 @@
 #!/bin/bash
 #
-# ONE STEP of the command file: three common post-processing operations on one
-# ERA5 file, run at the same time.
+# ONE STEP of the command file: reduce one ERA5 file to three regional
+# diagnostics, computing all three at the same time.
 #
-#   ncra                 average over the record (time) dimension
-#   ncks -d lat,lon      cut out a region
-#   ncks -4 -L 1         rewrite compressed
+#   ncra           regional time MEAN     -> the file's contribution to a climatology
+#   ncra -y max    regional time MAXIMUM  -> the companion extremes field
+#   ncks           regional TIME SERIES   -> full time resolution, region only
 #
-# All three stream the file rather than loading it, so each needs only a few
-# hundred MB no matter how large the input is.  That is what lets this example
-# work on the archive files as they are.
+# Each reads the same input, applies the same lat/lon hyperslab, and makes a
+# different reduction, so they are independent and run concurrently.  All three
+# stream the file rather than loading it, so each costs a few hundred MB
+# whatever the input size.
 #
-# The point of the example is the "&": a step is THREE processes, not one.  So
-# a node holds cores/3 steps, and launch_cf is told that with --nthreads 3.
+# Once every step has run, ./gather.sh joins the pieces into the finished
+# products: a continuous regional time series and a climatology over all files.
+#
+# The point for launch_cf is the "&": a step is THREE processes, not one.  A
+# node therefore holds cores/3 steps, which is what --nthreads 3 tells it.
 # Placement then matters:
 #
 #   * pinned  (taskset -c a-b)  a step's three processes stay on its own three
-#                               cores, idle or not
-#   * unpinned                  the Linux scheduler can use cores that other
-#                               steps have left idle while they wait on I/O
+#                               cores whether they are busy or blocked on I/O
+#   * unpinned                  the scheduler can use cores that other steps
+#                               have left idle while they wait on their own I/O
 #
 # Usage: process_file.sh <input.nc> [output dir]
 
@@ -27,16 +31,15 @@ set -u
 infile="${1:?usage: process_file.sh <input.nc> [output dir]}"
 outdir="${2:-./out}"
 
-# Region to cut out.  ERA5 longitudes run 0-360, latitudes 90 to -90.
-lat_range="${LAT_RANGE:-20.,60.}"        # roughly North America
-lon_range="${LON_RANGE:-230.,300.}"
+# The region to study.  ERA5 longitudes run 0-360, latitudes 90 to -90.
+# The default is roughly the contiguous United States.
+lat_range="${LAT_RANGE:-25.,50.}"
+lon_range="${LON_RANGE:-235.,295.}"
 
 [ -r "${infile}" ] || { echo "ERROR: cannot read ${infile}"; exit 1; }
 mkdir -p "${outdir}"
 
-# MEASURE=1 appends "<peak KB>|<seconds>|<command>" per process to mem.log.
-# Summarize with:
-#   awk -F'|' '{g=$1/1048576; if(g>m)m=g} END {printf "largest op %.2f GB\n", m}' out.*/mem.log
+# MEASURE=1 appends "<peak KB>|<seconds>|<command>" per process to mem.log
 measure=""
 if [ -n "${MEASURE:-}" ]; then
     if [ -x /usr/bin/time ]; then
@@ -46,17 +49,15 @@ if [ -n "${MEASURE:-}" ]; then
     fi
 fi
 
+region="-d latitude,${lat_range} -d longitude,${lon_range}"
 base=$(basename "${infile}" .nc)
 start=$(date +%s)
 
-${measure} ncra -O "${infile}" "${outdir}/${base}.timemean.nc" &
+${measure} ncra -O        ${region} "${infile}" "${outdir}/${base}.mean.nc"   &
+${measure} ncra -O -y max ${region} "${infile}" "${outdir}/${base}.max.nc"    &
+${measure} ncks -O        ${region} "${infile}" "${outdir}/${base}.series.nc" &
 
-${measure} ncks -O -d latitude,"${lat_range}" -d longitude,"${lon_range}" \
-                   "${infile}" "${outdir}/${base}.region.nc" &
-
-${measure} ncks -O -4 -L 1 "${infile}" "${outdir}/${base}.compressed.nc" &
-
-# wait for this step's operations to finish before the step exits
+# wait for this step's three reductions before the step exits
 wait
 
 echo "step ${base} | ops 3 | seconds $(( $(date +%s) - start )) | host $(hostname -s) | PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX:-0}"
