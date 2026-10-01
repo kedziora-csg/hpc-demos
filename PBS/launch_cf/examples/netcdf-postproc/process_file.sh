@@ -8,9 +8,10 @@
 #   ncks           regional TIME SERIES   -> full time resolution, region only
 #
 # Each reads the same input, applies the same lat/lon hyperslab, and makes a
-# different reduction, so they are independent and run concurrently.  All three
-# stream the file rather than loading it, so each costs a few hundred MB
-# whatever the input size.
+# different reduction, so they are independent and run concurrently.  ncra
+# streams the file a record at a time; ncks holds the whole region of a
+# variable, so its memory grows with the region (a few hundred MB for the
+# default, over a GB for the globe).  gen_cmdfile_postproc.sh measures both.
 #
 # Once every step has run, ./gather.sh joins the pieces into the finished
 # products: a continuous regional time series and a climatology over all files.
@@ -27,17 +28,20 @@
 # The step exits non-zero if any of its operations fails, and only finished
 # outputs are given their final names, so gather.sh never sees a partial file.
 #
-# Usage: process_file.sh <input.nc> [output dir]
+# Usage: process_file.sh <input.nc> [output dir] [lat range] [lon range]
+#   e.g. process_file.sh in.nc ./out -90.,90. 0.,359.75     (the whole globe)
 
 set -u
 
-infile="${1:?usage: process_file.sh <input.nc> [output dir]}"
+usage="usage: process_file.sh <input.nc> [output dir] [lat range] [lon range]"
+infile="${1:?${usage}}"
 outdir="${2:-./out}"
 
 # The region to study.  ERA5 longitudes run 0-360, latitudes 90 to -90.
-# The default is roughly the contiguous United States.
-lat_range="${LAT_RANGE:-25.,50.}"
-lon_range="${LON_RANGE:-235.,295.}"
+# The default is roughly the contiguous United States; gen_cmdfile_postproc.sh
+# writes the region it measured into every step.
+lat_range="${3:-${LAT_RANGE:-25.,50.}}"
+lon_range="${4:-${LON_RANGE:-235.,295.}}"
 
 [ -r "${infile}" ] || { echo "ERROR: cannot read ${infile}"; exit 1; }
 mkdir -p "${outdir}"
@@ -52,6 +56,23 @@ inner_time_dim="${INNER_TIME_DIM:-forecast_hour}"
 if ! ncks --cdl -m "${infile}" 2>/dev/null | grep -Eq "^[[:space:]]+${inner_time_dim} = "; then
     inner_time_dim=""
 fi
+
+# Averaging or taking the maximum of these over time gives numbers that look
+# like data but mean nothing -- the "mean" of yyyymmddhh dates, the "mean"
+# forecast hour -- so the mean and max drop them.  The time series keeps them.
+# forecast_initial_time stays: its mean is the middle of the period.
+meaningless="utc_date ${inner_time_dim}"
+
+# drop_meaningless <file>: remove those of ${meaningless} that <file> has
+drop_meaningless() {
+    local f="$1" hdr drop="" v
+    hdr=$(ncks --cdl -m "${f}" 2>/dev/null)
+    for v in ${meaningless}; do
+        echo "${hdr}" | grep -Eq "^[[:space:]]+[a-z0-9 ]+ ${v}( ;|\()" && drop="${drop:+${drop},}${v}"
+    done
+    [ -z "${drop}" ] && return 0
+    ncks -O -x -v "${drop}" "${f}" "${f}.2" && mv -f "${f}.2" "${f}"
+}
 
 # MEASURE=1 records each operation's peak resident memory and elapsed time.
 # Each process writes its OWN file under <outdir>/mem/ -- every step's three
@@ -102,6 +123,11 @@ reduce() {
             return 1
         fi
         mv -f "${tmp}.2" "${tmp}"
+    fi
+    if [ -n "${inner}" ] && ! drop_meaningless "${tmp}"; then
+        echo "ERROR: ${name}: could not drop ${meaningless}" >&2
+        rm -f "${tmp}" "${tmp}.2"
+        return 1
     fi
     mv -f "${tmp}" "${out}"
 }

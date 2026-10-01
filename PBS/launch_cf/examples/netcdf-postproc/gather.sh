@@ -66,11 +66,22 @@ ncrcat -O "${means[@]}" "${d}/regional_period_means.nc" || exit 1
 # per-file means instead would weight every file alike, but half-month files
 # hold anywhere from 26 to 32 forecasts.  Forecast products then need the same
 # average over forecast_hour that process_file.sh gave the per-file means.
-ncra -O "${d}/regional_timeseries.nc" "${d}/regional_climatology.nc" || exit 1
+clim="${d}/regional_climatology.nc"
+ncra -O "${d}/regional_timeseries.nc" "${clim}" || exit 1
 inner_time_dim="${INNER_TIME_DIM:-forecast_hour}"
-if ncks --cdl -m "${d}/regional_climatology.nc" 2>/dev/null | grep -Eq "^[[:space:]]+${inner_time_dim} = "; then
-    ncwa -O -a "${inner_time_dim}" "${d}/regional_climatology.nc" "${d}/regional_climatology.nc" || exit 1
+if ncks --cdl -m "${clim}" 2>/dev/null | grep -Eq "^[[:space:]]+${inner_time_dim} = "; then
+    ncwa -O -a "${inner_time_dim}" "${clim}" "${clim}" || exit 1
+else
+    inner_time_dim=""
 fi
+# and, as process_file.sh does for the per-file means, drop what averaging
+# turns into nonsense: the "mean" yyyymmddhh date and the "mean" forecast hour
+drop=""
+hdr=$(ncks --cdl -m "${clim}" 2>/dev/null)
+for v in utc_date ${inner_time_dim}; do
+    echo "${hdr}" | grep -Eq "^[[:space:]]+[a-z0-9 ]+ ${v}( ;|\()" && drop="${drop:+${drop},}${v}"
+done
+[ -z "${drop}" ] || ncks -O -x -v "${drop}" "${clim}" "${clim}" || exit 1
 
 # and the extreme of the per-file extremes, which needs no weighting
 ncra -O -y max "${maxes[@]}" "${d}/regional_maximum.nc" || exit 1

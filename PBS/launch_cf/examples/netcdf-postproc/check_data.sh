@@ -111,16 +111,22 @@ else
     echo "   all parameters of ${prod}:"
     awk -v p="${prod}" '$1 == p { printf "     %-20s %9s MB\n", $2, $4 }' "${table}" | sort -k2 -n
 fi
+
+# with no recommendation, check what make_data.sh stages by default -- or, for
+# a dataset without that product, the first product surveyed
+if [ -z "${prod}" ]; then
+    prod="e5.oper.fc.sfc.meanflux"
+    [ -d "${ds}/${prod}" ] || prod=$(head -1 "${table}" | cut -d' ' -f1)
+fi
 rm -f "${table}"
 
 echo
 echo "== 4. sanity check on one file =================================="
-# a file of the recommended parameter if there is one, else any file at all
-if [ -n "${prod}" ]; then
-    sample=$(find "${ds}/${prod}" -name "*${param}*.nc" -print -quit 2>/dev/null)
-else
-    sample=$(find "${ds}" -name '*.nc' -print -quit 2>/dev/null)
-fi
+# The first file in sorted order -- the first make_data.sh would stage.  Look in
+# the first month directory, which holds it, rather than sort the whole product.
+month=$(find "${ds}/${prod}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | head -1)
+sample=$(find "${month:-${ds}/${prod}}" -name "*${param}*.nc" 2>/dev/null | sort | head -1)
+[ -n "${sample}" ] || sample=$(find "${ds}/${prod}" -name "*${param}*.nc" 2>/dev/null | sort | head -1)
 if [ -z "${sample}" ]; then
     echo "   no .nc files found -- this dataset may live on object storage"
     exit 1
