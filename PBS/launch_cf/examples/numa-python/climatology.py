@@ -14,8 +14,13 @@ Each run has three phases:
 
   load      read the field from NetCDF (or a .npy cache) on the main thread;
             not timed, so neither GLADE nor the HDF5 lock is measured
-  compute   every thread loops over its band for --seconds seconds
+  compute   every thread loops over its band, for --seconds seconds or for
+            --passes passes
   report    one line: throughput, and where the threads ran and the memory is
+
+--seconds gives every run the same length, which suits a benchmark (see
+numa_test.sh).  --passes gives every run the same work, as a launch_cf step
+has, so a slower placement shows up as a longer step (see run_step.sh).
 
 With --sync, several copies started together on one node load first and then
 start computing at the same moment, so their compute phases overlap and they
@@ -35,9 +40,13 @@ Run it under numactl to restrict the CPUs and memory policy from outside.
 
 Output is one line of key=value fields, e.g.
 
-  variant=bind step=3 host=dec0001 cpus=48-63,176-191 threads_on=D3:100
-  memory_on=D3:100 local=100 GBps=35.2 s_per_pass=0.176
+  variant=bind step=3 host=dec0001 index=- cpus=48-63,176-191
+  threads_on=D3:100 memory_on=D3:100 local=100 load_s=2.1 seconds=20.0
+  GBps=35.2 s_per_pass=0.176
 
+index       PBS_ARRAY_INDEX, so steps can be grouped by the node they shared
+load_s      seconds to load the field (not part of GBps)
+seconds     length of the compute phase, to the slowest thread
 threads_on  share of the threads' CPU samples on each NUMA domain (%)
 memory_on   share of the array's sampled pages on each NUMA domain (%)
 local       share of a thread's samples on the domain holding its own band (%)
@@ -243,6 +252,9 @@ def main():
     run.add_argument("--threads", type=int, default=16)
     run.add_argument("--seconds", type=float, default=20.0,
                      help="length of the compute phase (default 20)")
+    run.add_argument("--passes", type=int,
+                     help="passes over its band per thread, instead of "
+                     "--seconds")
     run.add_argument("--first-touch", choices=("main", "threads"),
                      default="main", help="who first writes the band memory")
     run.add_argument("--pin-threads", action="store_true",
@@ -256,7 +268,9 @@ def main():
     out.add_argument("--step", default="-")
     args = p.parse_args()
 
+    t_load = time.monotonic()
     x = load(args)
+    t_load = time.monotonic() - t_load
     if args.prepare:
         return
 
@@ -290,7 +304,8 @@ def main():
             mean_std(band, scratch)
             passes += 1
             cpus[current_cpu()] += 1
-            if time.monotonic() >= end:
+            if passes == args.passes or (not args.passes
+                                         and time.monotonic() >= end):
                 break
         results[i] = (passes * band.nbytes, time.monotonic() - start[0], cpus,
                       collections.Counter(page_domains(band_addresses(band))))
@@ -307,6 +322,12 @@ def main():
     go.set()
     for t in threads:
         t.join()
+    if args.sync:                        # everyone is long past the barrier
+        try:
+            os.remove(os.path.join(args.sync, str(os.getpid())))
+            os.rmdir(args.sync)          # succeeds for the last one out
+        except OSError:
+            pass
 
     # report
     domain = cpu_domains()
@@ -329,8 +350,10 @@ def main():
              if memory_on and all_samples else "?")
     print(f"variant={args.label} step={args.step} "
           f"host={socket.gethostname().split('.')[0]} "
+          f"index={os.environ.get('PBS_ARRAY_INDEX', '-')} "
           f"cpus={cpu_ranges(allowed)} threads_on={shares(threads_on)} "
           f"memory_on={shares(memory_on)} local={local} "
+          f"load_s={t_load:.1f} seconds={elapsed:.1f} "
           f"GBps={gbps:.1f} s_per_pass={2 * nbytes / (gbps * 1e9):.3f}",
           flush=True)
 

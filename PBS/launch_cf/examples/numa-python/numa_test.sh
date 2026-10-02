@@ -28,7 +28,7 @@
 #   1 bind        one process alone, bound to domain 0
 #
 # The last two show why this has to be measured on a full node: a process
-# alone and unpinned can spread over every domain's memory channels.
+# alone has the node's memory system to itself, so its placement hardly matters.
 #
 # A warm-up run comes first, and each case repeats <repeats> times in a rotated
 # order so no case always runs first.  Each run prints the node's total
