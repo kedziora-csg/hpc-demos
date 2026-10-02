@@ -13,7 +13,8 @@ It has two parts:
   [Results](#results)).
 - **A `launch_cf` version.** Real steps, one month of ERA5 each, eight to a
   node, with an unpinned and a pinned command file to compare, as in
-  [`../thread-placement`](../thread-placement). Its results are still to come.
+  [`../thread-placement`](../thread-placement). Pinned, each node's
+  computing finished 2.2 times sooner (see [its results](#launch_cf-results)).
 
 The ideas behind it are in [`ThreadedAppIdea.md`](ThreadedAppIdea.md).
 
@@ -240,3 +241,37 @@ in the parent directory writes both command files.
 maximum), its mean step time, and `node s`, the time of each node's slowest
 step, averaged over nodes. That last is what placement costs a `launch_cf`
 job.
+
+### `launch_cf` results
+
+24 months (2019–2020) on 3 nodes per run, unpinned (job 7689807) and pinned
+(job 7689810), as `compare_runs.sh` reports them:
+
+```
+run                    steps failed   GB/s    min    max  comp s  node s  local  load s
+launch_cf.log             24      0   18.8   14.5   26.3    65.9    76.3   51%    22.2
+launch_cf.pinned.log      24      0   36.2   34.6   37.3    33.5    34.4  100%    21.9
+```
+
+- **Pinned steps were twice as fast.** They averaged 36.2 GB/s, the same as
+  the bound processes of the trial, and the slowest of the 24 still ran at
+  34.6. Unpinned steps averaged 18.8 GB/s, and ranged from 14.5 to 26.3.
+- **Each node was busy computing 2.2 times longer unpinned.** A node's
+  slowest step took 76 s on average unpinned, against 34 s pinned. Pinned,
+  the 8 steps on a node finished within about 3 s of each other, most of that
+  because February is shorter, so cores hardly sat idle waiting for a
+  straggler.
+- **Loading cost the same either way**, about 22 s per step to read and
+  decompress 3 GB from GLADE. Counting it, a pinned node finished in about
+  56 s and an unpinned one in about 98 s.
+- **The gap was larger than in the trial**, where unbound processes averaged
+  22 GB/s (177 GB/s over 8) and 69% local, against 18.8 GB/s and 51% here.
+  One difference is that the trial loaded each array from `/dev/shm` in a
+  second or two, while here the main thread spends 22 s reading from GLADE
+  and can move between domains in that time, leaving a step's pages in more
+  than one domain. The unpinned run's per-step logs would show whether that
+  happened.
+
+With every step of a node computing for the same length of time, the trial's
+throughput gap turns into a longer job: placement decides not only how fast
+the average step runs, but how long the slowest one keeps the node.
