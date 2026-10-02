@@ -1,0 +1,4 @@
+# numa_test.sh writes one log per run; the README quotes the results instead.
+numa_test.*.log
+# PBS output of numa_test.sh submitted as a batch job
+numa_test.o*
