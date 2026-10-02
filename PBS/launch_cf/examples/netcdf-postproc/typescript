@@ -1,0 +1,79 @@
+Script started on 2026-10-02 08:25:46-06:00 [TERM="xterm-256color" TTY="/dev/pts/110" COLUMNS="140" LINES="41"]
+kedziora@derecho2 $ LAT_RANGE=-90.,90. LON_RANGE=0.,359.75 ./gen_cmdfile_postproc.sh
+Measuring each operation on ./data/e5.oper.fc.sfc.meanflux.235_020_msror.ll025sc.1940010106_1940011606.nc
+  region: latitude -90.,90., longitude 0.,359.75
+  ncra -O -d latitude,-90.,90. -d longitude,0.,359.75   0.39 GB     2.8 s
+  ncra -O -y max -d latitude,-90.,90. -d longitude,0.,359.75   0.30 GB     3.5 s
+  ncks -O -d latitude,-90.,90. -d longitude,0.,359.75   1.60 GB     5.6 s
+  ---------------------------------
+  one step (3 concurrent ops): 2.28 GB, ~5.64 s here (expect ~3x on a full node)
+  42 steps/node -> 96 GB; node has 128 cores and 235 GB
+Wrote 126 steps to ./cmdfile
+ -> output directory ./out.unpinned/
+ -> submit with --nthreads 3 (42 steps/node, 126 processes on 128 cores)
+ -> steps unpinned, placed by the Linux scheduler
+kedziora@derecho2 $ LAT_RANGE=-90.,90. LON_RANGE=0.,359.75 ./gen_cmdfile_postproc.sh[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C pin
+Measuring each operation on ./data/e5.oper.fc.sfc.meanflux.235_020_msror.ll025sc.1940010106_1940011606.nc
+  region: latitude -90.,90., longitude 0.,359.75
+  ncra -O -d latitude,-90.,90. -d longitude,0.,359.75   0.39 GB     2.3 s
+  ncra -O -y max -d latitude,-90.,90. -d longitude,0.,359.75   0.30 GB     1.8 s
+  ncks -O -d latitude,-90.,90. -d longitude,0.,359.75   1.60 GB     2.8 s
+  ---------------------------------
+  one step (3 concurrent ops): 2.29 GB, ~2.85 s here (expect ~3x on a full node)
+  42 steps/node -> 96 GB; node has 128 cores and 235 GB
+Wrote 126 steps to ./cmdfile.pinned
+ -> output directory ./out.pinned/
+ -> submit with --nthreads 3 (42 steps/node, 126 processes on 128 cores)
+ -> each step pinned to its own 3 cores with taskset
+kedziora@derecho2 $ ./submit_launch_cf.sh 
+Found n_total_steps=126 in ./cmdfile
+ -> ppn=128
+ -> threads_per_step=3
+ -> steps_per_node=42
+ -> n_total_steps=126
+ -> njobs=2
+Running 3 jobs with 42 steps / node on NCAR resource derecho
++ qsub -v command_file=./cmdfile,n_total_steps=126,max_start_delay=0 -r y -q main -l select=1:ncpus=128:mpiprocs=42:ompthreads=3:mem=235G -J 0-2 -A SCSG0001 -l walltime=00:20:00 /glade/u/apps/opt/pbstools/bin/../share/launch_cf.pbs
+7685282[].desched1
+kedziora@derecho2 $ ./submit_launch_cf.sh [C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[1@_[1@p[1@i[7@nned.sh[1P[1P[1P
+Found n_total_steps=126 in ./cmdfile.pinned
+ -> ppn=128
+ -> threads_per_step=3
+ -> steps_per_node=42
+ -> n_total_steps=126
+ -> njobs=2
+Running 3 jobs with 42 steps / node on NCAR resource derecho
++ qsub -v command_file=./cmdfile.pinned,n_total_steps=126,max_start_delay=0 -r y -q main -l select=1:ncpus=128:mpiprocs=42:ompthreads=3:mem=235G -J 0-2 -A SCSG0001 -l walltime=00:20:00 /glade/u/apps/opt/pbstools/bin/../share/launch_cf.pbs
+7685285[].desched1
+kedziora@derecho2 $ f=$(ls data/*.nc | head -1)
+kedziora@derecho2 $ ncdump -hs $f | grep -E '_ChunkSizes|_DeflateLevel|_Storage'
+		MSROR:[01;31m[K_Storage[m[K = "chunked" ;
+		MSROR:[01;31m[K_ChunkSizes[m[K = 1, 12, 721, 1440 ;
+		MSROR:[01;31m[K_DeflateLevel[m[K = 1 ;
+		forecast_hour:[01;31m[K_Storage[m[K = "chunked" ;
+		forecast_hour:[01;31m[K_ChunkSizes[m[K = 12 ;
+		forecast_hour:[01;31m[K_DeflateLevel[m[K = 1 ;
+		forecast_initial_time:[01;31m[K_Storage[m[K = "chunked" ;
+		forecast_initial_time:[01;31m[K_ChunkSizes[m[K = 1024 ;
+		forecast_initial_time:[01;31m[K_DeflateLevel[m[K = 1 ;
+		latitude:[01;31m[K_Storage[m[K = "chunked" ;
+		latitude:[01;31m[K_ChunkSizes[m[K = 721 ;
+		latitude:[01;31m[K_DeflateLevel[m[K = 1 ;
+		longitude:[01;31m[K_Storage[m[K = "chunked" ;
+		longitude:[01;31m[K_ChunkSizes[m[K = 1440 ;
+		longitude:[01;31m[K_DeflateLevel[m[K = 1 ;
+		utc_date:[01;31m[K_Storage[m[K = "chunked" ;
+		utc_date:[01;31m[K_ChunkSizes[m[K = 1024 ;
+		utc_date:[01;31m[K_DeflateLevel[m[K = 1 ;
+kedziora@derecho2 $ ls -lL $fcat stdout-7676133.desched1/step-00001.out
+ls: cannot access 'stdout-7676133.desched1/step-00001.out': No such file or directory
+kedziora@derecho2 $ ls -lL $fcat stdout-7676133.desched1/step-00001.out[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[7P.desched1/step-00001.out7.desched1/step-00001.out6.desched1/step-00001.out8.desched1/step-00001.out5.desched1/step-00001.out8.desched1/step-00001.out2.desched1/step-00001.out[1P.desched1/step-00001.out[1P.desched1/step-00001.out2.desched1/step-00001.out8.desched1/step-00001.out2.desched1/step-00001.out
+-rw-r--r-- 1 kedziora ncar 143 Oct  2 08:27 [0m[00mstdout-7685282.desched1/step-00001.out[0m
+kedziora@derecho2 $ ./compare_runs.sh 
+run                       steps failed   mean s median s    max s  omitted
+launch_cf.log               126      0    18.53    18.58    19.55        0
+launch_cf.pinned.log        126      0    18.56    18.90    19.61        0
+kedziora@derecho2 $ exit
+exit
+
+Script done on 2026-10-02 08:32:00-06:00 [COMMAND_EXIT_CODE="0"]

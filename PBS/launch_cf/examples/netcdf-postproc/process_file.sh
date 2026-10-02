@@ -95,6 +95,79 @@ if [ -n "${MEASURE:-}" ]; then
     fi
 fi
 
+# WATCH_CORES=<seconds> checks the placement directly.  Every <seconds> it
+# records, for each NCO process this step has running,
+#
+#   * the core it is on now   (ps -o psr: the core it last ran on)
+#   * the cores it may use    (Cpus_allowed_list in /proc/<pid>/status, which
+#                              is what taskset sets)
+#
+# in <outdir>/cores/<base>.log, and adds a summary to the step's own log:
+#
+#   cores: mean/ncra     allowed 0-2      ran on 0,2       (18 samples)
+#
+# Pinned, every process should be allowed only its step's three cores and stay
+# on them; unpinned, each is allowed the whole node.  A sample costs one ps per
+# step, so keep the interval at a second or more.  Like MEASURE, set it in
+# config_env.sh, which is sourced on the compute node.
+#
+# See how a whole run was placed with:
+#
+#   grep -h '^cores:' stdout-<job id>/step-*.out | awk '{print $2, $4}' | sort | uniq -c
+#
+corelog=""
+if [ -n "${WATCH_CORES:-}" ]; then
+    mkdir -p "${outdir}/cores"
+    corelog="${outdir}/cores/${base}.log"
+    : > "${corelog}"
+fi
+
+# watch_cores: until killed, append one line per sample per NCO process
+# descended from this step:   <seconds> <pid> <op> <core> <allowed cores>
+watch_cores() {
+    local t0 now
+    t0=$(date +%s.%N)
+    while :; do
+        now=$(date +%s.%N)
+        ps -e -o pid=,ppid=,psr=,args= | awk -v top=$$ -v t0="${t0}" -v now="${now}" '
+            {
+                parent[$1] = $2; core[$1] = $3
+                prog[$1] = $4; sub(/.*\//, "", prog[$1])
+                out[$1] = $NF
+            }
+            END {
+                for (p in prog) {
+                    if (prog[p] !~ /^nc/) continue
+                    a = p
+                    while ((a in parent) && a != top) a = parent[a]
+                    if (a != top) continue
+                    # which reduction: the output it is writing names it
+                    kind = "?"
+                    if (match(out[p], /[.](mean|max|series)[.]tmp/))
+                        kind = substr(out[p], RSTART + 1, RLENGTH - 5)
+                    allowed = "?"
+                    f = "/proc/" p "/status"
+                    while ((getline line < f) > 0)
+                        if (line ~ /^Cpus_allowed_list:/) { split(line, w, /[ \t]+/); allowed = w[2] }
+                    close(f)
+                    printf "%.1f %s %s/%s %s %s\n", now - t0, p, kind, prog[p], core[p], allowed
+                }
+            }' >> "${corelog}"
+        sleep "${WATCH_CORES}"
+    done
+}
+
+# summarize_cores: one line per process -- the cores it was allowed and the
+# cores it was seen on
+summarize_cores() {
+    awk '
+        { k = $2; op[k] = $3; allowed[k] = $5; n[k]++
+          if (!((k, $4) in seen)) { seen[k, $4] = 1; on[k] = on[k] (on[k] == "" ? "" : ",") $4 } }
+        END { for (k in op)
+                  printf "cores: %-14s allowed %-8s ran on %-10s (%d samples)\n", op[k], allowed[k], on[k], n[k] }' \
+        "${corelog}" | sort
+}
+
 region="-d latitude,${lat_range} -d longitude,${lon_range}"
 
 # reduce <name> <ncwa options, or "" for none> <NCO operator and options...>
@@ -134,6 +207,12 @@ reduce() {
 
 start=$(date +%s.%N)
 
+watcher=""
+if [ -n "${corelog}" ]; then
+    watch_cores &
+    watcher=$!
+fi
+
 pids=() ; names=()
 reduce mean   "-y avg" ncra -O        & pids+=($!) ; names+=(mean)
 reduce max    "-y max" ncra -O -y max & pids+=($!) ; names+=(max)
@@ -147,6 +226,12 @@ done
 
 secs=$(awk -v a="${start}" -v b="$(date +%s.%N)" 'BEGIN {printf "%.2f", b-a}')
 echo "step ${base} | ops 3 | failed ${#failed[@]} | seconds ${secs} | host $(hostname -s) | PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX:-0}"
+
+if [ -n "${watcher}" ]; then
+    kill "${watcher}" 2>/dev/null
+    wait "${watcher}" 2>/dev/null
+    summarize_cores
+fi
 
 if [ ${#failed[@]} -gt 0 ]; then
     echo "ERROR: ${base}: failed: ${failed[*]}" >&2

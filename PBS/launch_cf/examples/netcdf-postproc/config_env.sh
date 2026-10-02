@@ -11,3 +11,8 @@ module load nco
 # This file is sourced ON THE COMPUTE NODE, which is why setting MEASURE in your
 # login shell before submitting would have no effect.
 #export MEASURE=1
+
+# Uncomment to sample, every N seconds, which core each step's NCO processes run
+# on and which cores they are allowed -- a direct check that taskset pinned them.
+# See WATCH_CORES in process_file.sh.
+#export WATCH_CORES=1
