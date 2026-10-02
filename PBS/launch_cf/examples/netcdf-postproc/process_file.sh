@@ -145,11 +145,13 @@ watch_cores() {
                     kind = "?"
                     if (match(out[p], /[.](mean|max|series)[.]tmp/))
                         kind = substr(out[p], RSTART + 1, RLENGTH - 5)
-                    allowed = "?"
+                    allowed = ""
                     f = "/proc/" p "/status"
                     while ((getline line < f) > 0)
                         if (line ~ /^Cpus_allowed_list:/) { split(line, w, /[ \t]+/); allowed = w[2] }
                     close(f)
+                    # gone since ps listed it: its psr is stale, so skip it
+                    if (allowed == "") continue
                     printf "%.1f %s %s/%s %s %s\n", now - t0, p, kind, prog[p], core[p], allowed
                 }
             }' >> "${corelog}"
@@ -157,15 +159,25 @@ watch_cores() {
     done
 }
 
-# summarize_cores: one line per process -- the cores it was allowed and the
-# cores it was seen on
+# summarize_cores: one line per operation -- the cores it was allowed and the
+# cores it was seen on.  Lines are per operation, not per pid: a process caught
+# between fork and exec (NCO starting a helper, say) shows up briefly under its
+# parent's name with a pid of its own, and is the same operation.
 summarize_cores() {
     awk '
-        { k = $2; op[k] = $3; allowed[k] = $5; n[k]++
-          if (!((k, $4) in seen)) { seen[k, $4] = 1; on[k] = on[k] (on[k] == "" ? "" : ",") $4 } }
-        END { for (k in op)
-                  printf "cores: %-14s allowed %-8s ran on %-10s (%d samples)\n", op[k], allowed[k], on[k], n[k] }' \
-        "${corelog}" | sort
+        { op = $3; n[op]++
+          if (!((op, $5) in seen_a)) { seen_a[op, $5] = 1; allowed[op] = allowed[op] (allowed[op] == "" ? "" : ";") $5 }
+          if (!((op, $4) in seen_c)) { seen_c[op, $4] = 1; nc[op]++; c[op, nc[op]] = $4 + 0 } }
+        END {
+            for (op in n) {
+                # the cores seen, in numerical order
+                for (i = 2; i <= nc[op]; i++)
+                    for (j = i; j > 1 && c[op, j - 1] > c[op, j]; j--) {
+                        t = c[op, j]; c[op, j] = c[op, j - 1]; c[op, j - 1] = t }
+                on = c[op, 1]; for (i = 2; i <= nc[op]; i++) on = on "," c[op, i]
+                printf "cores: %-14s allowed %-8s ran on %-10s (%d samples)\n", op, allowed[op], on, n[op]
+            }
+        }' "${corelog}" | sort
 }
 
 region="-d latitude,${lat_range} -d longitude,${lon_range}"
