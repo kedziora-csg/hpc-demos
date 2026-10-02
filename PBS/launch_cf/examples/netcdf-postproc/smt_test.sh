@@ -40,7 +40,10 @@ mkdir -p "${work}"
 trap 'rm -rf "${work}"' EXIT
 cp -L "${src}" "${work}/in.nc"
 
-echo "host $(hostname -s), $(nproc) CPUs available, input ${src}"
+# nproc would report OMP_NUM_THREADS (which PBS sets to 1 unless ompthreads is
+# requested), not the CPUs this shell may use, so read the affinity itself
+cpus=$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status 2>/dev/null)
+echo "host $(hostname -s), CPUs ${cpus:-?} available, input ${src}"
 echo
 
 # run <processes> <pin|free>
