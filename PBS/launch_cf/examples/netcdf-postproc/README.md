@@ -19,7 +19,7 @@ It demonstrates three things:
 
 It was also meant to compare pinned and unpinned placement. It turned out not
 to show a difference, and [Results](#results) explains why. For an example
-where placement matters, see [`../threaded-apps`](../threaded-apps).
+where placement matters, see [`../thread-placement`](../thread-placement).
 
 ## What each step does
 
@@ -288,8 +288,9 @@ rotated order. Averages of the three repeats, one compute node:
 - Pinning should matter when **threads within one process share data and
   memory**. Then where threads run relative to each other and to their memory
   (the node's NUMA domains) affects speed, and the scheduler doesn't account
-  for it. That is the subject of [`../threaded-apps`](../threaded-apps), which
-  uses `numactl` to bind each step to a NUMA domain.
+  for it. That is the subject of
+  [`../thread-placement`](../thread-placement), which uses `numactl` to bind
+  each step to a NUMA domain.
 - This example is a good starting point for real post-processing: a parallel
   phase and a gather, several operations per step, a memory check before
   submitting, failures that can't slip through, and step-level timing.

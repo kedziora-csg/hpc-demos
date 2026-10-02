@@ -21,15 +21,15 @@ PYTHON   ?= python3
 launch_cf ?= launch_cf
 
 # Each example directory holds its own cmdfile and submission script.
-EXAMPLES := derecho-640procs threaded-apps netcdf-postproc
+EXAMPLES := derecho-640procs thread-placement netcdf-postproc
 
 # Command files that can be generated with no further input.  netcdf-postproc
 # is deliberately absent: its command files list the data files make_data.sh
 # produced, so run "make netcdf-data" for that one.
 CMDFILES := derecho-640procs/cmdfile \
-            threaded-apps/cmdfile \
-            threaded-apps/cmdfile.numactl \
-            threaded-apps/cmdfile.numactl_bind
+            thread-placement/cmdfile \
+            thread-placement/cmdfile.numactl \
+            thread-placement/cmdfile.numactl_bind
 
 all: hello_omp.exe $(CMDFILES)
 
@@ -46,14 +46,14 @@ derecho-640procs/cmdfile: gen_cmdfile.sh Makefile
 
 # 16 steps of a 16-thread application: 8 steps/node -> a 2-element array.
 # Two command files, identical except that one pins each step to a NUMA domain.
-threaded-apps/cmdfile: gen_cmdfile.sh Makefile
+thread-placement/cmdfile: gen_cmdfile.sh Makefile
 	./gen_cmdfile.sh --nsteps 16 --nthreads 16 --exe ../hello_omp.exe --output $@
 
-threaded-apps/cmdfile.numactl: gen_cmdfile_numactl.sh
+thread-placement/cmdfile.numactl: gen_cmdfile_numactl.sh
 	./gen_cmdfile_numactl.sh $@
 
 # ...and the same again, additionally binding one thread per physical core.
-threaded-apps/cmdfile.numactl_bind: gen_cmdfile_numactl.sh
+thread-placement/cmdfile.numactl_bind: gen_cmdfile_numactl.sh
 	./gen_cmdfile_numactl.sh $@ bind
 
 # Build the NetCDF example's inputs, then both of its command files.  Slicing
