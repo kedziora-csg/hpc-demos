@@ -20,25 +20,57 @@ The ideas behind it are in [`ThreadedAppIdea.md`](ThreadedAppIdea.md).
 
 ## The computation
 
-[`climatology.py`](climatology.py) holds one month of hourly ERA5 2 m
-temperature in memory (744 × 721 × 1440 float32, 3.1 GB). It splits the grid
-into latitude bands, one per thread, and each thread computes the time mean
-and standard deviation of its band, over and over, for a fixed time.
+[`climatology.py`](climatology.py) computes the time mean and standard
+deviation, at every grid point, of one month of hourly ERA5 2 m temperature:
+744 × 721 × 1440 float32 values, 3.1 GB, held in memory. The answer is two
+721 × 1440 maps. It then computes the same two maps again, many times over,
+and throws every copy away. Only the timing matters.
+
+**Why repeat it.** One mean and standard deviation of the month takes about
+0.17 s on 16 threads, while reading the file from GLADE takes about 22 s. Done
+once, the computing would be too short to measure next to the load, so the
+script repeats it. Each repeat is honest work: the array is 50 times the L3
+cache of a NUMA domain, so nothing carries over from one repeat to the next,
+and every repeat streams all 3.1 GB from memory again. For the memory system,
+200 repeats over one month look like one computation over 200 months. The
+repeats stand in for heavier analysis.
+
+**What a pass is.** The grid's 721 latitudes are split into 16 bands of about
+45, one per thread. A *pass* is one thread computing the mean and standard
+deviation of its own band, all 744 hours of it. It reads the band twice, once
+to sum it for the mean and once to sum the squared differences from the mean,
+8 hours at a time. When all 16 threads have made one pass, the whole month's
+mean and standard deviation have been computed once, and 6.2 GB has been read.
+
+**How many passes.** The two parts of the example repeat it differently:
+
+- `numa_test.sh` runs every thread for a fixed **20 s**, as many passes as fit:
+  about 115 for a process with its threads and memory together, about 70
+  without. The measure is how much it got through.
+- `launch_cf` steps make a fixed **200 passes** per thread (`PASSES` in
+  `run_step.sh`): the month's mean and standard deviation 200 times, about
+  1.2 TB read. The measure is how long that took.
+
+Three things keep the measurement about memory placement:
 
 - **The threads really run at once.** NumPy releases the GIL inside each call,
   and the script sets `OMP_NUM_THREADS`, `BLIS_NUM_THREADS` and similar
   variables to 1, so its 16 threads are the only threads.
-- **The work is limited by memory bandwidth.** Each pass reads the array twice
-  and does about one flop per value, and the array is 50 times the L3 cache of
-  a NUMA domain.
-- **Reading the file isn't timed.** The field is read once into `/dev/shm`, so
-  neither GLADE nor the HDF5 lock in netCDF4 is part of the measurement.
+- **The work is limited by memory bandwidth.** A pass does about one
+  arithmetic operation per value it reads, so the threads spend their time
+  waiting for memory, not computing.
+- **Reading the file isn't part of the speed.** The main thread reads the
+  whole month before the threads start, and only the passes are timed.
+  `numa_test.sh` reads the file once into `/dev/shm` and loads it from there
+  for every run; a `launch_cf` step reads it from GLADE and reports that time
+  separately.
 
 Each run prints one line: its throughput, the NUMA domains its threads ran on,
 the domains holding its memory, and `local`, the share of the threads' time
 spent on the domain that holds their own band. `climatology.py` finds where the
 pages are with the `move_pages` system call, and where the threads run with
-`sched_getcpu`.
+`sched_getcpu`. [Reading a step's output](#reading-a-steps-output) explains
+every field.
 
 ## The trial
 
@@ -237,6 +269,39 @@ From this directory on a Derecho login node, with `$PBS_ACCOUNT` set:
 of 8, because the steps on a node wait for eight of them. `make numa-cmdfiles`
 in the parent directory writes both command files.
 
+### Reading a step's output
+
+Each `stdout-<job id>/step-NNNNN.out` holds what one step wrote, standard
+output and standard error together. It has two lines:
+
+```
+read VAR_2T(744, 721, 1440) from /glade/campaign/collections/gdex/data/d633000/e5.oper.an.sfc/202001/e5.oper.an.sfc.128_167_2t.ll025sc.2020010100_2020013123.nc
+variant=unpinned step=202001 host=dec2443 index=1 cpus=0-255 threads_on=D3:48,D4:19,D7:18,D1:7,D6:3,D5:2,D2:2,D0:1 memory_on=D0:100 local=1 load_s=21.8 seconds=70.9 GBps=17.4 s_per_pass=0.357
+```
+
+The first, from `climatology.py` as it starts reading, names the variable,
+its shape (time, latitude, longitude) and the file. The second is the step's
+report:
+
+| field        | meaning |
+| ------------ | ------- |
+| `variant`    | the label from the command file: `unpinned` or `pinned` |
+| `step`       | the month the step read |
+| `host`       | the node it ran on |
+| `index`      | `PBS_ARRAY_INDEX`: which array job, so which group of 8 steps shared a node at the same time. A node can serve several indices one after another, as `dec2443` did here |
+| `cpus`       | the CPUs the step was allowed. `0-255` is the whole node, both hardware threads of every core: unpinned. A pinned step on domain 3 shows `48-63,176-191`, its 16 cores and their second hardware threads |
+| `threads_on` | where the threads ran: after each pass, each thread notes its CPU, and this is the share of those notes in each NUMA domain, largest first. `D0:0` means under 0.5% |
+| `memory_on`  | where the data is: the domain of 32 pages sampled through each thread's band (512 in all), found with the `move_pages` system call after the compute phase |
+| `local`      | the share of thread time on the domain holding that thread's own band, in %. 100 is ideal; with memory spread evenly over 8 domains it would be about 12 |
+| `load_s`     | seconds to read and decompress the file, before computing; not part of `GBps` |
+| `seconds`    | the compute phase, from the start (after the 8 steps meet) to when the slowest thread finished its passes |
+| `GBps`       | bytes of the array read by all threads together, per second of `seconds`. Each pass reads the band twice |
+| `s_per_pass` | seconds one mean and standard deviation of the whole array took at that rate |
+
+So this step's threads ran mostly in domains 3, 4 and 7, while all its
+memory sat in domain 0, where its main thread had read the file: only 1% of
+its thread time was local, and it ran at less than half the pinned speed.
+
 `compare_runs.sh` reports each run's step throughput (mean, minimum and
 maximum), its mean step time, and `node s`, the time of each node's slowest
 step, averaged over nodes. That last is what placement costs a `launch_cf`
@@ -264,14 +329,35 @@ launch_cf.pinned.log      24      0   36.2   34.6   37.3    33.5    34.4  100%  
 - **Loading cost the same either way**, about 22 s per step to read and
   decompress 3 GB from GLADE. Counting it, a pinned node finished in about
   56 s and an unpinned one in about 98 s.
-- **The gap was larger than in the trial**, where unbound processes averaged
-  22 GB/s (177 GB/s over 8) and 69% local, against 18.8 GB/s and 51% here.
-  One difference is that the trial loaded each array from `/dev/shm` in a
-  second or two, while here the main thread spends 22 s reading from GLADE
-  and can move between domains in that time, leaving a step's pages in more
-  than one domain. The unpinned run's per-step logs would show whether that
-  happened.
+- **All three unpinned array jobs ran on one node**, `dec2443`, one after
+  another; the pinned ones ran on three. A slow node would slow both
+  placements alike, and the pinned nodes and the trial's node all gave the
+  same 36 GB/s bound, so this is unlikely to matter, but a pinned run on
+  `dec2443` would rule it out.
 
-With every step of a node computing for the same length of time, the trial's
-throughput gap turns into a longer job: placement decides not only how fast
-the average step runs, but how long the slowest one keeps the node.
+#### Why the gap is larger than in the trial
+
+In the trial, unbound processes averaged 22 GB/s (177 GB/s over 8) and 69%
+local; here 18.8 GB/s and 51%. It is not that memory was spread differently:
+in 23 of the 24 unpinned steps all of a step's memory was in one domain, as
+in the trial, and pairs of steps shared a domain as often or a little more
+(each node left two or three domains holding nobody's memory).
+
+The difference is what a step waits for. Each thread owns a fixed band, so
+**a step with a fixed amount of work is as slow as its slowest thread**: the
+other 15 finish their passes and wait. A thread that spends part of the run
+on another domain, or sharing a core with another step's thread, holds back
+the whole step. In the trial each thread instead ran for a fixed 20 s, and a
+slow thread just did less of the total; the others kept going, so a slow
+thread cost only its own share.
+
+The unpinned steps show this. Even the nine whose threads were at least 70%
+local averaged only 21 GB/s, against 36 pinned. `201905` had domain 3 to
+itself and 77% of its thread time local, and still ran at 16.6 GB/s. Most
+threaded codes divide their work this way, OpenMP's usual static schedule
+included, so the `launch_cf` result is the one to expect from them: there,
+poor placement costs not just bandwidth but the time every thread spends
+waiting for the slowest.
+
+Placement decides not only how fast the average step runs, but how long the
+slowest step keeps the node.

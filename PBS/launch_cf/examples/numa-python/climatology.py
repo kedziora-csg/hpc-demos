@@ -6,9 +6,11 @@ threads ran and where its memory lives.
 The array is split into latitude bands, one per thread, and every thread
 repeatedly computes the time mean and standard deviation of its own band with
 NumPy.  NumPy releases the GIL inside each call, so the threads really do run
-at once, and the work is two streaming passes over the array: about one flop
-per value read, so its speed is set by memory bandwidth, not arithmetic.  That
-is the kind of work NUMA placement affects.
+at once.  One call of mean_std() on a band is a "pass": it reads the band
+twice, doing about one flop per value read, so its speed is set by memory
+bandwidth, not arithmetic.  That is the kind of work NUMA placement affects.
+The result is the same every pass and is discarded; the repeats only make the
+computing long enough to time (see "The computation" in README.md).
 
 Each run has three phases:
 
@@ -206,7 +208,8 @@ def load(args):
 def mean_std(band, scratch):
     """Time mean and standard deviation of a (time, lat, lon) band.
 
-    Two passes over the band; each NumPy call handles CHUNK time steps.
+    One pass: reads the band twice, once for the mean and once for the
+    squared anomalies; each NumPy call handles CHUNK time steps.
     """
     nt = band.shape[0]
     total = np.zeros(band.shape[1:], np.float64)
@@ -343,7 +346,7 @@ def main():
                 local_samples += n * pages.get(d, 0) / n_pages
         memory_on.update(pages)
 
-    read = sum(r[0] for r in results) * 2      # two passes per mean_std
+    read = sum(r[0] for r in results) * 2      # a pass reads its band twice
     elapsed = max(r[1] for r in results)
     gbps = read / elapsed / 1e9
     local = (f"{round(100 * local_samples / all_samples)}"
