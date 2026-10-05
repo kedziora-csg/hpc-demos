@@ -43,6 +43,8 @@ def step_dir(run):
     """stdout-<job id> directory for a launch_cf log, or the directory itself."""
     if os.path.isdir(run):
         return run
+    if not os.path.exists(run):
+        sys.exit(f"ERROR: {run} not found")
     with open(run) as f:
         # qsub prints the job id, e.g. 7672405[].desched1; the logs directory
         # is named after it without the "[]"

@@ -5,7 +5,8 @@
 # climatology.py reads the file, then every thread makes ${PASSES} passes over
 # its band.  A real analysis would make one; the repeats stand in for heavier
 # work, so the compute phase (about 35 s when bound) is long enough to measure
-# next to the load.  The step's last line is climatology.py's report.
+# next to the load.  The step's last line is climatology.py's report, after
+# one line per thread (--thread-report).
 #
 # The 8 steps on a node meet in a node-local directory after loading, and start
 # computing together.  Loading takes a different time for each step -- GLADE is
@@ -36,4 +37,4 @@ month=$(basename "${file}" | grep -o '[0-9]\{10\}_' | head -1 | cut -c1-6)
 
 exec python3 ./climatology.py --file "${file}" --threads 16 --passes "${PASSES}" \
     --sync "${sync}" --nprocs ${steps_per_node} \
-    --label "${label}" --step "${month:-?}"
+    --label "${label}" --step "${month:-?}" --thread-report

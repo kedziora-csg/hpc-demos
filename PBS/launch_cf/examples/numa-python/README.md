@@ -255,6 +255,7 @@ Two things differ from the trial:
 | `submit_launch_cf_pinned.sh` | submit the pinned run                                   |
 | `compare_runs.sh`            | compare the runs by their steps                         |
 | `plot_local.py`              | plot each step's compute time against its `local` share |
+| `plot_threads.py`            | plot every thread: where it ran, and when it finished   |
 
 From this directory on a Derecho login node, with `$PBS_ACCOUNT` set:
 
@@ -302,6 +303,34 @@ report:
 So this step's threads ran mostly in domains 3, 4 and 7, while all its
 memory sat in domain 0, where its main thread had read the file: only 1% of
 its thread time was local, and it ran at less than half the pinned speed.
+
+### Per-thread lines
+
+`run_step.sh` passes `--thread-report`, so before the report line each step
+also writes one line per thread, 16 in all, like this (illustrative values):
+
+```
+thread=5 variant=unpinned step=201905 host=dec2443 index=0 rows=225-269 passes=200 seconds=74.5 memory_on=D3:100 local=40 timeline=D3:0.0-30.2,D7:30.2-74.5
+```
+
+| field       | meaning |
+| ----------- | ------- |
+| `thread`    | the thread's number, 0-15 |
+| `rows`      | its band: latitude rows of the 721, from the north |
+| `passes`    | passes it made over its band |
+| `seconds`   | when it finished. The step's `seconds` is the latest of these |
+| `memory_on` | the domain holding this thread's band |
+| `local`     | the share of this thread's time on that domain, in % |
+| `timeline`  | the domains it ran on, in order: each span is a run of passes that ended on one domain, in seconds from the start of computing |
+
+The domain is sampled at the end of each pass, so a span is accurate to about
+one pass (0.2-0.4 s).
+
+[`plot_threads.py`](plot_threads.py) draws these. For one node of each run it
+draws the 8 steps side by side, one bar per thread, colored by whether the
+thread was on its data's domain, then grayed from when it finished until its
+step's slowest thread did: time its core sat idle. A second figure plots every
+thread's finish time against its own `local` share.
 
 `compare_runs.sh` reports each run's step throughput (mean, minimum and
 maximum), its mean step time, and `node s`, the time of each node's slowest

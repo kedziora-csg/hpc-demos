@@ -55,6 +55,19 @@ local       share of a thread's samples on the domain holding its own band (%)
 GBps        array bytes read per second, all threads together
 s_per_pass  seconds per mean+stddev of the whole array at that rate
 
+With --thread-report, one line per thread comes before that report line:
+
+  thread=5 variant=unpinned step=201905 host=dec2443 index=0 rows=225-269
+  passes=200 seconds=74.5 memory_on=D3:100 local=40
+  timeline=D3:0.0-30.2,D7:30.2-74.5
+
+rows        the thread's band of latitude rows
+seconds     when this thread finished; the step ends with its slowest thread
+memory_on   where this thread's band is
+local       share of this thread's samples on the domain holding its band (%)
+timeline    which domain the thread was on, over time: each span is a run of
+            passes that ended on that domain, in seconds from the start
+
 Examples:
   python3 climatology.py --file e5.oper.an.sfc.128_167_2t.ll025sc.2020010100_2020013123.nc
   python3 climatology.py --synthetic 200 --threads 4 --seconds 5
@@ -227,6 +240,22 @@ def mean_std(band, scratch):
     return mean, np.sqrt(sumsq / nt)
 
 
+def timeline(path):
+    """[(domain, end time) per pass] -> 'D3:0.0-41.3,D1:41.3-52.1'.
+
+    Runs of passes that ended on the same domain merge into one span.  The
+    domain is sampled at the end of each pass and stands for the whole pass.
+    """
+    spans, t0 = [], 0.0
+    for d, t in path:
+        if spans and spans[-1][0] == d:
+            spans[-1][2] = t
+        else:
+            spans.append([d, t0, t])
+        t0 = t
+    return ",".join(f"D{d}:{a:.1f}-{b:.1f}" for d, a, b in spans)
+
+
 def node_barrier(sync_dir, nprocs, timeout=600):
     """Wait until nprocs processes have reached this point (a file each)."""
     open(os.path.join(sync_dir, str(os.getpid())), "w").close()
@@ -266,6 +295,8 @@ def main():
                      help="node-local directory for --nprocs to meet in")
     run.add_argument("--nprocs", type=int, default=1,
                      help="processes meeting in --sync before computing")
+    run.add_argument("--thread-report", action="store_true",
+                     help="also print one line per thread (see above)")
     out = p.add_argument_group("labels for the report line")
     out.add_argument("--label", default="-")
     out.add_argument("--step", default="-")
@@ -283,6 +314,7 @@ def main():
               f"every copy of this script to the same {args.threads}; "
               "restrict the CPUs with numactl or taskset first", file=sys.stderr)
 
+    domain = cpu_domains()
     bounds = np.linspace(0, x.shape[1], args.threads + 1).astype(int)
     views = [x[:, lo:hi, :] for lo, hi in zip(bounds, bounds[1:])]
     nbytes = x.nbytes
@@ -302,16 +334,20 @@ def main():
         ready.wait()
         go.wait()
         cpus, passes = collections.Counter(), 0
+        path = []                        # (domain, time) at the end of each pass
         end = start[0] + args.seconds
         while True:
             mean_std(band, scratch)
             passes += 1
-            cpus[current_cpu()] += 1
+            cpu = current_cpu()
+            cpus[cpu] += 1
+            path.append((domain.get(cpu, "?"), time.monotonic() - start[0]))
             if passes == args.passes or (not args.passes
                                          and time.monotonic() >= end):
                 break
         results[i] = (passes * band.nbytes, time.monotonic() - start[0], cpus,
-                      collections.Counter(page_domains(band_addresses(band))))
+                      collections.Counter(page_domains(band_addresses(band))),
+                      path, passes)
 
     threads = [threading.Thread(target=work, args=(i,))
                for i in range(args.threads)]
@@ -333,18 +369,29 @@ def main():
             pass
 
     # report
-    domain = cpu_domains()
+    host = socket.gethostname().split('.')[0]
+    index = os.environ.get('PBS_ARRAY_INDEX', '-')
     threads_on, memory_on = collections.Counter(), collections.Counter()
     local_samples = all_samples = 0
-    for _, _, cpus, pages in results:
+    for i, (_, t_done, cpus, pages, path, passes) in enumerate(results):
         n_pages = sum(pages.values())
+        mine = 0.0                       # this thread's local samples
         for cpu, n in cpus.items():
             d = domain.get(cpu, "?")
             threads_on[d] += n
             all_samples += n
             if n_pages:                  # share of this band local to cpu
-                local_samples += n * pages.get(d, 0) / n_pages
+                mine += n * pages.get(d, 0) / n_pages
+        local_samples += mine
         memory_on.update(pages)
+        if args.thread_report:
+            n = sum(cpus.values())
+            print(f"thread={i} variant={args.label} step={args.step} "
+                  f"host={host} index={index} "
+                  f"rows={bounds[i]}-{bounds[i + 1] - 1} passes={passes} "
+                  f"seconds={t_done:.1f} memory_on={shares(pages)} "
+                  f"local={round(100 * mine / n) if n_pages else '?'} "
+                  f"timeline={timeline(path)}")
 
     read = sum(r[0] for r in results) * 2      # a pass reads its band twice
     elapsed = max(r[1] for r in results)
@@ -352,8 +399,7 @@ def main():
     local = (f"{round(100 * local_samples / all_samples)}"
              if memory_on and all_samples else "?")
     print(f"variant={args.label} step={args.step} "
-          f"host={socket.gethostname().split('.')[0]} "
-          f"index={os.environ.get('PBS_ARRAY_INDEX', '-')} "
+          f"host={host} index={index} "
           f"cpus={cpu_ranges(allowed)} threads_on={shares(threads_on)} "
           f"memory_on={shares(memory_on)} local={local} "
           f"load_s={t_load:.1f} seconds={elapsed:.1f} "
