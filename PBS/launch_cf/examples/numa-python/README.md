@@ -254,6 +254,7 @@ Two things differ from the trial:
 | `submit_launch_cf.sh`        | submit the unpinned run                                 |
 | `submit_launch_cf_pinned.sh` | submit the pinned run                                   |
 | `compare_runs.sh`            | compare the runs by their steps                         |
+| `plot_local.py`              | plot each step's compute time against its `local` share |
 
 From this directory on a Derecho login node, with `$PBS_ACCOUNT` set:
 
@@ -317,6 +318,14 @@ run                    steps failed   GB/s    min    max  comp s  node s  local 
 launch_cf.log             24      0   18.8   14.5   26.3    65.9    76.3   51%    22.2
 launch_cf.pinned.log      24      0   36.2   34.6   37.3    33.5    34.4  100%    21.9
 ```
+
+![Compute time per step against local thread time: the 24 pinned steps
+cluster at 100% local and 31-35 s; the 24 unpinned steps spread from 1% to 95%
+local and 47-81 s](local_vs_time.png)
+
+Each dot is one step, plotted by `plot_local.py`. Among unpinned steps, more
+local time helps (about 2.4 s per 10 points of `local`), but even the most
+local of them, 80-95%, took 47-61 s, against 31-35 s for every pinned step.
 
 - **Pinned steps were twice as fast.** They averaged 36.2 GB/s, the same as
   the bound processes of the trial, and the slowest of the 24 still ran at
