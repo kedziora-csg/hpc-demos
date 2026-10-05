@@ -399,3 +399,60 @@ waiting for the slowest.
 
 Placement decides not only how fast the average step runs, but how long the
 slowest step keeps the node.
+
+#### Thread by thread: a second run
+
+To check that, both runs were repeated with
+[per-thread lines](#per-thread-lines) (unpinned job 7721961, pinned job
+7721963):
+
+```
+run                    steps failed   GB/s    min    max  comp s  node s  local  load s
+stdout-7721961.desched1    24      0   23.4   18.0   36.9    54.1    65.6   60%    22.4
+stdout-7721963.desched1    24      0   36.2   34.4   37.7    33.5    34.7  100%    22.3
+```
+
+Pinned gave the same 36.2 GB/s as the first run. Unpinned did better than its
+first run (23.4 GB/s against 18.8), which shows how much an unpinned job
+depends on where the scheduler happens to put things, but a node's slowest
+step still took 1.9 times as long.
+
+![The 8 unpinned steps on dec1720, one bar per thread: threads switch between
+their data's domain and others, finish at very different times, and the fast
+ones wait in gray for the slowest](threads_unpinned.png)
+
+![The 8 pinned steps on dec1727: every thread on its data's domain the whole
+time, all finishing at 31-34 s with almost no waiting](threads_pinned.png)
+
+Both figures are drawn by `plot_threads.py` on one time scale.
+
+- **The slowest thread sets the step's time.** Unpinned, threads of one step
+  finished at very different times, and on average a thread's core sat idle
+  for 11% of its step, waiting for the slowest. Pinned, a step's 16 threads
+  finished within 0.5-2.7 s of each other (1% idle).
+- **Unpinned threads didn't stay put.** Most bars switch between their data's
+  domain (aqua) and others (violet) several times during the minute. Some
+  threads spent nearly all of it away: in `201906`, whose data was in domain
+  7, most threads ran elsewhere.
+- **Two steps shared a domain.** `201906` and `201908` both had their data in
+  domain 7, because both main threads happened to be there while they read
+  their files, and together they got 38 GB/s (18.3 + 19.8), about what one
+  pinned step gets alone. Domain 4 on that node held nobody's data. Nothing
+  in Linux keeps two unpinned processes' memory apart: the scheduler places
+  threads by CPU load alone, and to it, two busy threads in a 16-core domain
+  is a light load. Every node of both unpinned runs had at least one such
+  pair.
+- **A main thread can move while it loads.** `201901` has its data split,
+  94% in domain 3 and 6% in domain 2: the scheduler moved its main thread
+  partway through the 22 s read. That happened in one step of 24.
+
+![Thread finish time against each thread's own local share: unpinned threads
+spread from 24 to 67 s, slower the less local; all 384 pinned threads sit at
+100% and 30-36 s](threads_scatter.png)
+
+Across all 384 unpinned threads, the less of its time a thread spent on its
+data's domain, the longer its 200 passes took: 55 s on average for threads
+under 25% local, 39 s for those at 95% or more. Even those fully local
+threads were slower than pinned ones (33 s on average), probably because
+their domain could also hold another step's data, or another step's threads
+competing for its cores.

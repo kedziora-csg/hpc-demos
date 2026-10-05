@@ -186,9 +186,10 @@ def plot_scatter(runs, output):
                    label=f"{name}, {len(pts)} threads", zorder=3)
         # threads that all sit at one x hide behind each other; say how many
         if min(x) == max(x):
+            # below the cluster, where other runs' dots are least likely
             ax.annotate(f"{len(pts)} threads, all at {x[0]:.0f}%",
-                        (x[0], sum(y) / len(y)), xytext=(-12, 0),
-                        textcoords="offset points", ha="right", va="center",
+                        (x[0], min(y)), xytext=(-4, -14),
+                        textcoords="offset points", ha="right", va="top",
                         fontsize=9, color=TEXT_2)
     ax.set_xlim(-3, 103)
     ax.set_ylim(0, ymax * 1.12)
