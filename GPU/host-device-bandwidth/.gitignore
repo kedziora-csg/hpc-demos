@@ -1,0 +1,9 @@
+# build_nvbandwidth.sh clones, builds and copies nvbandwidth here
+nvbandwidth-src/
+nvbandwidth-build/
+nvbandwidth
+
+# bandwidth_test.sh writes one log per run, and its PBS output; the README
+# quotes the results instead.
+bandwidth_test.*.log
+bandwidth_test.o*
