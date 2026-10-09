@@ -21,7 +21,7 @@ PYTHON   ?= python3
 launch_cf ?= launch_cf
 
 # Each example directory holds its own cmdfile and submission script.
-EXAMPLES := derecho-640procs thread-placement netcdf-postproc numa-python
+EXAMPLES := derecho-640procs thread-placement netcdf-postproc numa-python gpu-bandwidth
 
 # Command files that can be generated with no further input.  netcdf-postproc
 # is deliberately absent: its command files list the data files make_data.sh
@@ -102,5 +102,6 @@ clobber: clean
 	@echo "(netcdf-postproc/data left in place; delete it by hand to re-slice)"
 	rm -f $(addsuffix /launch_cf.*.pbs,$(EXAMPLES))
 	rm -f $(addsuffix /launch_cf.o*,$(EXAMPLES))
+	rm -f gpu-bandwidth/gpubw_*.o* gpu-bandwidth/submitted.log
 
 .PHONY: all cmdfiles netcdf-data numa-cmdfiles submit dryrun csv clean clobber

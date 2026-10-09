@@ -1,0 +1,9 @@
+# gen_cmdfile_gpu.sh writes the command files; submit_matrix.sh makes them
+cmdfile*
+
+# Output of the launch_cf runs (job output, per-step stdout, the submission
+# log); the README quotes the results instead.
+gpubw_*.o*
+launch_cf.o*
+stdout-*/
+submitted.log
