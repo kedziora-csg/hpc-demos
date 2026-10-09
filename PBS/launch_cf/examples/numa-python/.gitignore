@@ -8,3 +8,9 @@ numa_test.log
 # Derecho (gen_cmdfile_numa.sh) rather than tracked.
 cmdfile
 cmdfile.pinned
+
+# Output of the launch_cf runs (logs, PBS output, per-step stdout); the README
+# quotes the results instead.
+*.log
+launch_cf.o*
+stdout-*/
