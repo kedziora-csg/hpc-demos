@@ -181,7 +181,7 @@ using:
 | gpudev: 6 hours | `06:00:00` accepted. `06:01:00` refused: "the queue limit is 21600 seconds". |
 | gpudev: 8 GPUs | Per job: 9 GPUs refused by `qsub` ("Job violates queue and/or server resource limits"). Per user: `max_run_res.ngpus = [u:PBS_GENERIC=8]`. One job array of 3 subjobs, each 1 node with 4 GPUs (12 GPUs in all): subjobs 0 and 1 ran together (8 GPUs), and subjob 2 started only when they finished. Across all the develop runs, no more than 8 GPUs ran at once. |
 | gpudev: 487 GB per node | A 1-GPU job with `mem=487gb` ran. One with `mem=488gb` stayed queued, until deleted: "Insufficient amount of resource mem". A job that does not ask gets the queue default, **120 GB**, per chunk. |
-| gpudev: 4 indices per job array | A 5-index array was refused by `qsub`: "Array job exceeds server or queue size limit" (`max_array_size = 4` on `develop`). The limit is per array: two 4-index arrays ran at the same time, 8 subjobs in all. |
+| gpudev: 4 indices per job array | A 5-index array was refused by `qsub`: "Array job exceeds server or queue size limit" (`max_array_size = 4` on `develop`). The limit is per array: two 4-index arrays of 1-GPU subjobs ran at the same time, 8 subjobs and 8 GPUs, which is also the per-user GPU limit. |
 | gpudev: shared nodes | `place=scatter:shared`. Four 1-GPU subjobs shared one node, and two 2-GPU subjobs shared another. |
 | charges: gpu per node (4 GPUs), gpudev per GPU requested | Not visible from a job. SAM takes job records daily; the job ids are below. |
 
